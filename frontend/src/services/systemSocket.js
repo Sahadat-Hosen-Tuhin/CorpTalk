@@ -1,9 +1,16 @@
 import { io } from 'socket.io-client';
+import { getAccessToken } from './apiClient.js';
 
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:5000';
 
 export function pingSocketServer() {
+  const token = getAccessToken();
+  if (!token) {
+    return Promise.reject(new Error('Sign in before checking the realtime connection'));
+  }
+
   const socket = io(SOCKET_URL, {
+    auth: { token },
     autoConnect: false,
     reconnection: false,
     timeout: 5000,

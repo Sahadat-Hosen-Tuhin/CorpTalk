@@ -6,13 +6,17 @@ const errorHandler = (error, req, res, next) => {
   const statusCode =
     Number.isInteger(error.statusCode) && error.statusCode >= 400 && error.statusCode <= 599
       ? error.statusCode
-      : error.type === 'entity.parse.failed'
-        ? 400
-        : 500;
+      : error.code === 'LIMIT_FILE_SIZE'
+        ? 413
+        : error.type === 'entity.parse.failed'
+          ? 400
+          : 500;
   const code =
     error.type === 'entity.parse.failed'
       ? 'INVALID_JSON'
-      : error.code || (statusCode === 404 ? 'NOT_FOUND' : 'INTERNAL_SERVER_ERROR');
+      : error.code === 'LIMIT_FILE_SIZE'
+        ? 'FILE_TOO_LARGE'
+        : error.code || (statusCode === 404 ? 'NOT_FOUND' : 'INTERNAL_SERVER_ERROR');
 
   if (statusCode >= 500) {
     console.error(error);
@@ -21,7 +25,9 @@ const errorHandler = (error, req, res, next) => {
   const message =
     statusCode >= 500 && process.env.NODE_ENV === 'production'
       ? 'Internal server error'
-      : error.message || 'Internal server error';
+      : error.code === 'LIMIT_FILE_SIZE'
+        ? 'Avatar images must be 5 MB or smaller'
+        : error.message || 'Internal server error';
 
   return res.status(statusCode).json({
     error: {

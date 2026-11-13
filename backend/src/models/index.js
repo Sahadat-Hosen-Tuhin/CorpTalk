@@ -1,6 +1,7 @@
 module.exports = {
   User: require('./user'),
   Otp: require('./otp'),
+  RefreshSession: require('./refreshSession'),
   Friendship: require('./friendship'),
   Block: require('./block'),
   Conversation: require('./conversation'),

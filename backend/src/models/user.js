@@ -42,6 +42,13 @@ const userSchema = new Schema(
       maxlength: 2048,
       default: null,
     },
+    avatarPublicId: {
+      type: String,
+      trim: true,
+      maxlength: 512,
+      default: null,
+      select: false,
+    },
     bio: {
       type: String,
       trim: true,
@@ -51,6 +58,16 @@ const userSchema = new Schema(
     isVerified: {
       type: Boolean,
       default: false,
+    },
+    isOnline: {
+      type: Boolean,
+      default: false,
+    },
+    authVersion: {
+      type: Number,
+      min: 0,
+      default: 0,
+      select: false,
     },
     lastSeen: {
       type: Date,

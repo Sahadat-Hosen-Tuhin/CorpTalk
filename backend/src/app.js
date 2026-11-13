@@ -7,13 +7,23 @@ const morgan = require('morgan');
 const { getAllowedOrigins } = require('./config/cors');
 const errorHandler = require('./middlewares/errorHandler');
 const notFound = require('./middlewares/notFound');
+const authRoutes = require('./routes/authRoutes');
+const userRoutes = require('./routes/userRoutes');
 
 const createApp = () => {
   const app = express();
   const allowedOrigins = getAllowedOrigins();
 
   app.disable('x-powered-by');
-  app.use(helmet());
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          imgSrc: ["'self'", 'data:', 'blob:', 'https://res.cloudinary.com'],
+        },
+      },
+    }),
+  );
   app.use(
     cors({
       origin(origin, callback) {
@@ -35,6 +45,8 @@ const createApp = () => {
     });
   });
 
+  app.use('/api/v1/auth', authRoutes);
+  app.use('/api/v1/users', userRoutes);
   app.use(notFound);
   app.use(errorHandler);
 

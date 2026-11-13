@@ -10,17 +10,15 @@ function DashboardPage() {
   return (
     <div className="space-y-10">
       <section className="max-w-3xl">
-        <p className="mb-4 inline-flex items-center gap-2 rounded-full border border-indigo-300/20 bg-indigo-300/5 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-indigo-200">
-          <span className="h-1.5 w-1.5 rounded-full bg-indigo-300" />
+        <p className="mb-4 inline-flex items-center gap-2 rounded-full border border-brand-primary/25 bg-brand-primary-soft px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-brand-primary-text">
+          <span className="h-1.5 w-1.5 rounded-full bg-brand-primary" />
           Phase 0 · Foundation
         </p>
-        <h1 className="text-4xl font-semibold tracking-tight text-white sm:text-6xl">
+        <h1 className="text-4xl font-semibold tracking-tight text-heading sm:text-6xl">
           Your workspace,
-          <span className="block bg-gradient-to-r from-indigo-300 to-cyan-200 bg-clip-text text-transparent">
-            ready to connect.
-          </span>
+          <span className="block text-brand-primary">ready to connect.</span>
         </h1>
-        <p className="mt-5 max-w-2xl text-base leading-7 text-slate-400 sm:text-lg">
+        <p className="mt-5 max-w-2xl text-base leading-7 text-text-muted sm:text-lg">
           Check that the CorpTalk API and realtime gateway are reachable before building chat
           features on top.
         </p>
@@ -31,11 +29,11 @@ function DashboardPage() {
           <div>
             <h2
               id="connections-title"
-              className="text-sm font-semibold uppercase tracking-wider text-slate-300"
+              className="text-sm font-semibold uppercase tracking-wider text-brand-secondary"
             >
               Connection checks
             </h2>
-            <p className="mt-1 text-sm text-slate-500">
+            <p className="mt-1 text-sm text-text-muted">
               Run each check against your local backend.
             </p>
           </div>
@@ -58,18 +56,18 @@ function DashboardPage() {
         </div>
       </section>
 
-      <section className="grid gap-4 rounded-3xl border border-white/10 bg-white/[0.03] p-6 sm:grid-cols-3">
+      <section className="grid gap-4 rounded-3xl border border-border bg-bg-subtle p-6 sm:grid-cols-3">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Frontend</p>
-          <p className="mt-2 font-medium text-white">React · Vite · Tailwind</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-text-muted">Frontend</p>
+          <p className="mt-2 font-medium text-heading">React · Vite · Tailwind</p>
         </div>
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Backend</p>
-          <p className="mt-2 font-medium text-white">Express · MongoDB · Mongoose</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-text-muted">Backend</p>
+          <p className="mt-2 font-medium text-heading">Express · MongoDB · Mongoose</p>
         </div>
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Realtime</p>
-          <p className="mt-2 font-medium text-white">Socket.IO</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-text-muted">Realtime</p>
+          <p className="mt-2 font-medium text-heading">Socket.IO</p>
         </div>
       </section>
     </div>

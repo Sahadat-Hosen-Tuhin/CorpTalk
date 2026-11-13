@@ -4,9 +4,16 @@ const http = require('node:http');
 const app = require('./app');
 const { connectDB, disconnectDB } = require('./config/db');
 const createSocketServer = require('./sockets');
+const { resetPresence } = require('./services/presenceService');
 
 const startServer = async () => {
   await connectDB();
+  try {
+    await resetPresence();
+  } catch (error) {
+    await disconnectDB();
+    throw error;
+  }
 
   const httpServer = http.createServer(app());
   const io = createSocketServer(httpServer);

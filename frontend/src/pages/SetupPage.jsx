@@ -20,13 +20,13 @@ const setupItems = [
 function SetupPage() {
   return (
     <section className="mx-auto max-w-3xl">
-      <p className="text-sm font-semibold uppercase tracking-[0.18em] text-indigo-200">
+      <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-primary-text">
         Getting started
       </p>
-      <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
+      <h1 className="mt-3 text-3xl font-semibold tracking-tight text-heading sm:text-4xl">
         Local setup checklist
       </h1>
-      <p className="mt-4 text-base leading-7 text-slate-400">
+      <p className="mt-4 text-base leading-7 text-text-muted">
         Configure the database connection locally, then use the dashboard to validate the server and
         realtime handshake.
       </p>
@@ -35,14 +35,14 @@ function SetupPage() {
         {setupItems.map((item, index) => (
           <li
             key={item.title}
-            className="flex gap-4 rounded-2xl border border-white/10 bg-slate-900/70 p-5"
+            className="flex gap-4 rounded-2xl border border-border bg-bg-subtle p-5"
           >
-            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-indigo-400/10 text-sm font-semibold text-indigo-200">
+            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-brand-primary-soft text-sm font-semibold text-brand-primary-text">
               {index + 1}
             </span>
             <div>
-              <h2 className="font-semibold text-white">{item.title}</h2>
-              <p className="mt-1 text-sm leading-6 text-slate-400">{item.detail}</p>
+              <h2 className="font-semibold text-heading">{item.title}</h2>
+              <p className="mt-1 text-sm leading-6 text-text-muted">{item.detail}</p>
             </div>
           </li>
         ))}

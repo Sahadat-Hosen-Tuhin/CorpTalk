@@ -8,7 +8,6 @@ const otpSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: 'User',
       required: true,
-      index: true,
     },
     purpose: {
       type: String,
@@ -23,7 +22,7 @@ const otpSchema = new Schema(
     attempts: {
       type: Number,
       min: 0,
-      max: 10,
+      max: 3,
       default: 0,
     },
     expiresAt: {
@@ -39,6 +38,6 @@ const otpSchema = new Schema(
 );
 
 otpSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0, name: 'otp_expiry_ttl' });
-otpSchema.index({ userId: 1, purpose: 1, createdAt: -1 }, { name: 'otp_user_purpose_recent' });
+otpSchema.index({ userId: 1, purpose: 1 }, { unique: true, name: 'otp_user_purpose_unique' });
 
 module.exports = mongoose.models.Otp || mongoose.model('Otp', otpSchema);

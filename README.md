@@ -51,11 +51,11 @@ npm install
 npm run dev
 ```
 
-The backend listens on `PORT` (default `5000`) after MongoDB connects. Check `GET /api/health`, then use the frontend dashboard to test HTTP and Socket.IO connectivity. The Socket.IO smoke-test event is `health:ping`; the acknowledgement returns `health:pong`. Frontend public URLs can be overridden in `frontend/.env` using the keys in `frontend/.env.example`. Do not put secrets in `VITE_*` variables.
+The backend listens on `PORT` (default `5000`) after MongoDB connects. Check `GET /api/health`. After signing in, use the frontend dashboard to test HTTP and authenticated Socket.IO connectivity. The Socket.IO smoke-test event is `health:ping`; the acknowledgement returns `health:pong`. Frontend public URLs can be overridden in `frontend/.env` using the keys in `frontend/.env.example`. Do not put secrets in `VITE_*` variables.
 
 Run backend tests and checks with `npm test`, `npm run lint`, and `npm run format:check` from `backend/`. Run the frontend checks with `npm run lint`, `npm run format:check`, and `npm run build` from `frontend/`.
 
-The remaining variables in `backend/.env.example` are reserved for the PRD's planned auth, Redis/BullMQ, SMTP, file storage, FCM, LiveKit, TURN/STUN, AI, and monitoring integrations. They are intentionally blank until those features are configured. For production, set `COOKIE_SECURE=true`, use strong unique JWT secrets, and supply credentials through the hosting provider's secret manager. `GOOGLE_APPLICATION_CREDENTIALS` should point to a Firebase service-account file kept outside version control.
+Redis/BullMQ, FCM, LiveKit, TURN/STUN, AI, and monitoring values in `backend/.env.example` are reserved for their later phases. For production, set `COOKIE_SECURE=true`, use strong unique JWT secrets, and supply credentials through the hosting provider's secret manager. `GOOGLE_APPLICATION_CREDENTIALS` should point to a Firebase service-account file kept outside version control.
 
 ### Model layout
 
@@ -65,6 +65,7 @@ Every model has its own file under `backend/src/models/`. Edit the model respons
 | --- | --- |
 | `user.js` | Account, profile, username, privacy and application preferences |
 | `otp.js` | Hashed, expiring email/phone verification and password-reset codes |
+| `refreshSession.js` | Hashed, revocable refresh-token sessions and rotation families |
 | `friendship.js` | One relationship/request per normalized user pair, including rejection cooldown data |
 | `block.js` | Directional user blocks, kept separate to avoid an ever-growing user document |
 | `conversation.js` | Direct/group membership, group permissions, last-message preview and pinned messages |
@@ -88,6 +89,42 @@ Models use timestamps, strict schema validation and explicit indexes for uniquen
 - `meetingJoinRequest.js` is separate rather than embedded in a meeting, so pending-request checks, per-user rejection limits, and meeting cancellation do not grow the meeting document without bound.
 - Do not enable message encryption, server-side search, link previews, or AI processing without deciding how those features interact; end-to-end encrypted content cannot be inspected by server-side features.
 
+## Phase 1 authentication and profile
+
+The backend now provides email-verified account creation, 6-digit email codes, password login and recovery, rotating refresh sessions, protected profile APIs, avatar uploads, and authenticated Socket.IO presence. Passwords and OTP codes are stored as hashes; refresh tokens are stored as hashes and only returned in an `HttpOnly` cookie. Access tokens stay in frontend memory and are sent in the `Authorization` header.
+
+### Configure Phase 1 services
+
+Fill the authentication, SMTP, and Cloudinary values in `backend/.env`; never put these credentials in frontend `VITE_*` variables. JWT signing secrets must each contain at least 32 characters. `BCRYPT_SALT_ROUNDS` must be between 10 and 14. In production, set `COOKIE_SECURE=true`, configure the appropriate `COOKIE_SAME_SITE`/`COOKIE_DOMAIN`, and set the exact frontend origins in `CORS_ORIGINS`.
+
+The email delivery integration uses `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD`, and `SMTP_FROM`. Cloudinary avatar storage uses `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET`. Avatar uploads accept JPEG, PNG, or WebP up to 5 MB.
+
+### Auth API
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/v1/auth/signup` | Create an unverified account and send an email code |
+| `POST` | `/api/v1/auth/verify-otp` | Verify the 6-digit code (5-minute expiry; locked after 3 wrong attempts) |
+| `POST` | `/api/v1/auth/resend-otp` | Resend a code after the 60-second cooldown |
+| `POST` | `/api/v1/auth/login` | Sign in, issue a 15-minute access token and an HttpOnly 7-day refresh cookie |
+| `POST` | `/api/v1/auth/refresh` | Rotate the refresh session and issue a new access token |
+| `POST` | `/api/v1/auth/logout` | Revoke the current refresh session and clear its cookie |
+| `POST` | `/api/v1/auth/forgot-password` | Request a password-reset code without revealing account existence |
+| `POST` | `/api/v1/auth/reset-password` | Verify a reset code, change the password and revoke active sessions |
+| `GET` | `/api/v1/users/me` | Return the authenticated user's profile |
+| `PATCH` | `/api/v1/users/me` | Update name, phone, and bio |
+| `POST` | `/api/v1/users/me/avatar` | Upload an authenticated user's avatar as multipart field `avatar` |
+
+Auth routes use input validation and IP-based rate limits. Socket.IO connections require an access token in the handshake `auth.token` field. Authenticated clients receive `presence:update` events when visible users come online or go offline. Presence connections are currently tracked in one backend process; run a single realtime instance until a Redis Socket.IO adapter/shared presence store is configured for horizontal scaling. On startup, stale database presence flags are reset.
+
+The frontend keeps each screen and shared auth UI element in its own JSX file: `Login.jsx`, `Signup.jsx`, `VerifyEmail.jsx`, `ForgotPassword.jsx`, `ResetPassword.jsx`, and `Profile.jsx`, with reusable auth form, header, and route-guard components. Refresh tokens are not stored in local storage.
+
+Run backend tests and checks with `npm test`, `npm run lint`, and `npm run format:check` from `backend/`. Run the frontend checks with `npm run lint`, `npm run format:check`, and `npm run build` from `frontend/`.
+
 ## Backend dependencies
 
 The backend entry point is `backend/src/server.js`; it connects MongoDB before accepting HTTP/Socket.IO traffic and closes both cleanly on shutdown. Feature routes and services can be added incrementally without combining database models.
+
+## Frontend theme
+
+The client theme uses the supplied orange/charcoal palette. Tailwind CSS 4 tokens and the light/dark CSS variables live in `frontend/src/index.css`; see [frontend/README.md](./frontend/README.md) for the utility names and mode behavior.
