@@ -17,6 +17,16 @@ jest.mock('../src/services/tokenService', () => ({
 jest.mock('../src/models/user', () => ({
   updateOne: jest.fn(async () => ({ matchedCount: 1 })),
 }));
+jest.mock('../src/models/friendship', () => ({
+  find: jest.fn(() => ({
+    select: jest.fn(async () => [
+      {
+        requester: { toString: () => '507f1f77bcf86cd799439011' },
+        recipient: { toString: () => '507f191e810c19729de860ea' },
+      },
+    ]),
+  })),
+}));
 
 const createSocketServer = require('../src/sockets');
 

@@ -69,6 +69,11 @@ const userSchema = new Schema(
       default: 0,
       select: false,
     },
+    pushTokens: {
+      type: [{ type: String, trim: true, maxlength: 4096 }],
+      default: [],
+      select: false,
+    },
     lastSeen: {
       type: Date,
       default: null,

@@ -45,6 +45,14 @@ export const resetPasswordSchema = z
 
 export const profileSchema = z.object({
   name: z.string().trim().min(1, 'Enter your name').max(80),
+  username: z.union([
+    z
+      .string()
+      .trim()
+      .transform((value) => value.replace(/^@/, '').toLowerCase())
+      .pipe(z.string().regex(/^[a-z0-9_]{3,20}$/, 'Use 3-20 letters, numbers, or underscores')),
+    z.literal(''),
+  ]),
   bio: z.string().trim().max(500),
   phone: z.union([z.string().trim().min(7).max(32), z.literal('')]),
 });

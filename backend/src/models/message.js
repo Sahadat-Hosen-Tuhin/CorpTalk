@@ -6,6 +6,7 @@ const mediaSchema = new Schema(
   {
     url: { type: String, trim: true, maxlength: 2048, required: true },
     publicId: { type: String, trim: true, maxlength: 512, default: null },
+    resourceType: { type: String, enum: ['image', 'video', 'raw'], default: 'raw' },
     mimeType: { type: String, trim: true, maxlength: 128, default: null },
     originalName: { type: String, trim: true, maxlength: 255, default: null },
     sizeBytes: { type: Number, min: 0, default: null },
@@ -61,7 +62,9 @@ const messageSchema = new Schema(
       default: '',
       validate: {
         validator(value) {
-          return !['text', 'system'].includes(this.type) || value.trim().length > 0;
+          return (
+            this.deletedForAll || !['text', 'system'].includes(this.type) || value.trim().length > 0
+          );
         },
         message: 'Text and system messages require text content',
       },
@@ -76,6 +79,12 @@ const messageSchema = new Schema(
     replyTo: {
       type: Schema.Types.ObjectId,
       ref: 'Message',
+      default: null,
+    },
+    clientMessageId: {
+      type: String,
+      trim: true,
+      maxlength: 64,
       default: null,
     },
     status: {
@@ -128,5 +137,13 @@ messageSchema.index(
   { name: 'conversation_messages_cursor' },
 );
 messageSchema.index({ text: 'text' }, { name: 'message_text_search' });
+messageSchema.index(
+  { conversationId: 1, sender: 1, clientMessageId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { clientMessageId: { $type: 'string' } },
+    name: 'sender_client_message_unique',
+  },
+);
 
 module.exports = mongoose.models.Message || mongoose.model('Message', messageSchema);

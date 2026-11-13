@@ -13,6 +13,8 @@ const mongoose = require('mongoose');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 const request = require('supertest');
 const createApp = require('../src/app');
+
+const MONGODB_MEMORY_SERVER_VERSION = '7.0.14';
 const User = require('../src/models/user');
 const Otp = require('../src/models/otp');
 const RefreshSession = require('../src/models/refreshSession');
@@ -39,9 +41,13 @@ const registerAndVerify = async (email) => {
 
 beforeAll(async () => {
   console.info('auth-test: starting MongoMemoryServer');
-  mongo = await MongoMemoryServer.create();
+  mongo = await MongoMemoryServer.create({
+    binary: { version: MONGODB_MEMORY_SERVER_VERSION },
+  });
   console.info('auth-test: MongoMemoryServer started');
-  mongoose.connection.on('error', (error) => console.error('auth-test: mongo connection error', error));
+  mongoose.connection.on('error', (error) =>
+    console.error('auth-test: mongo connection error', error),
+  );
   await mongoose.connect(mongo.getUri(), { serverSelectionTimeoutMS: 5000 });
   console.info('auth-test: Mongoose connected');
   await Promise.all([User.init(), Otp.init(), RefreshSession.init()]);

@@ -6,6 +6,7 @@ import GuestRoute from './components/GuestRoute.jsx';
 import HomeRedirect from './components/HomeRedirect.jsx';
 import RequireAuth from './components/RequireAuth.jsx';
 import DashboardPage from './pages/DashboardPage.jsx';
+import ChatPage from './pages/ChatPage.jsx';
 import ForgotPassword from './pages/ForgotPassword.jsx';
 import Login from './pages/Login.jsx';
 import NotFoundPage from './pages/NotFoundPage.jsx';
@@ -38,6 +39,8 @@ function App() {
       <Route element={<RequireAuth />}>
         <Route element={<AppLayout />}>
           <Route path="profile" element={<Profile />} />
+          <Route path="chat" element={<ChatPage />} />
+          <Route path="chat/:conversationId" element={<ChatPage />} />
           <Route path="dashboard" element={<DashboardPage />} />
           <Route path="setup" element={<SetupPage />} />
           <Route path="404" element={<NotFoundPage />} />

@@ -18,4 +18,10 @@ export default defineConfig([
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
   },
+  {
+    files: ['public/firebase-messaging-sw.js'],
+    languageOptions: {
+      globals: { importScripts: 'readonly', firebase: 'readonly' },
+    },
+  },
 ]);

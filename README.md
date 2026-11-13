@@ -55,26 +55,26 @@ The backend listens on `PORT` (default `5000`) after MongoDB connects. Check `GE
 
 Run backend tests and checks with `npm test`, `npm run lint`, and `npm run format:check` from `backend/`. Run the frontend checks with `npm run lint`, `npm run format:check`, and `npm run build` from `frontend/`.
 
-Redis/BullMQ, FCM, LiveKit, TURN/STUN, AI, and monitoring values in `backend/.env.example` are reserved for their later phases. For production, set `COOKIE_SECURE=true`, use strong unique JWT secrets, and supply credentials through the hosting provider's secret manager. `GOOGLE_APPLICATION_CREDENTIALS` should point to a Firebase service-account file kept outside version control.
+Redis/BullMQ, LiveKit, TURN/STUN, AI, and monitoring values in `backend/.env.example` are reserved for their later phases. FCM is used for optional offline chat notifications. For production, set `COOKIE_SECURE=true`, use strong unique JWT secrets, and supply credentials through the hosting provider's secret manager. `GOOGLE_APPLICATION_CREDENTIALS` should point to a Firebase service-account file kept outside version control.
 
 ### Model layout
 
 Every model has its own file under `backend/src/models/`. Edit the model responsible for a collection instead of maintaining a single large schema file. `backend/src/models/index.js` is the central export when an application entry point needs all models.
 
-| Model file | Collection purpose |
-| --- | --- |
-| `user.js` | Account, profile, username, privacy and application preferences |
-| `otp.js` | Hashed, expiring email/phone verification and password-reset codes |
-| `refreshSession.js` | Hashed, revocable refresh-token sessions and rotation families |
-| `friendship.js` | One relationship/request per normalized user pair, including rejection cooldown data |
-| `block.js` | Directional user blocks, kept separate to avoid an ever-growing user document |
-| `conversation.js` | Direct/group membership, group permissions, last-message preview and pinned messages |
-| `message.js` | Chat content, media metadata, delivery/read receipts, reactions and deletion state |
-| `call.js` | 1-to-1 voice/video call history |
-| `meeting.js` | Scheduled meeting configuration, invite list and access settings |
-| `meetingJoinRequest.js` | Meeting join decisions and rejection count, stored separately for scalable queries |
-| `story.js` | Expiring image/video stories and viewer records |
-| `report.js` | User/content reports and moderation status |
+| Model file              | Collection purpose                                                                   |
+| ----------------------- | ------------------------------------------------------------------------------------ |
+| `user.js`               | Account, profile, username, privacy and application preferences                      |
+| `otp.js`                | Hashed, expiring email/phone verification and password-reset codes                   |
+| `refreshSession.js`     | Hashed, revocable refresh-token sessions and rotation families                       |
+| `friendship.js`         | One relationship/request per normalized user pair, including rejection cooldown data |
+| `block.js`              | Directional user blocks, kept separate to avoid an ever-growing user document        |
+| `conversation.js`       | Direct/group membership, group permissions, last-message preview and pinned messages |
+| `message.js`            | Chat content, media metadata, delivery/read receipts, reactions and deletion state   |
+| `call.js`               | 1-to-1 voice/video call history                                                      |
+| `meeting.js`            | Scheduled meeting configuration, invite list and access settings                     |
+| `meetingJoinRequest.js` | Meeting join decisions and rejection count, stored separately for scalable queries   |
+| `story.js`              | Expiring image/video stories and viewer records                                      |
+| `report.js`             | User/content reports and moderation status                                           |
 
 Models use timestamps, strict schema validation and explicit indexes for uniqueness, lookups, cursor pagination and TTL cleanup. Stories default to a 24-hour lifetime. TTL deletion is asynchronous in MongoDB: application queries must still filter expired OTPs and stories by `expiresAt`.
 
@@ -101,25 +101,50 @@ The email delivery integration uses `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SM
 
 ### Auth API
 
-| Method | Endpoint | Purpose |
-| --- | --- | --- |
-| `POST` | `/api/v1/auth/signup` | Create an unverified account and send an email code |
-| `POST` | `/api/v1/auth/verify-otp` | Verify the 6-digit code (5-minute expiry; locked after 3 wrong attempts) |
-| `POST` | `/api/v1/auth/resend-otp` | Resend a code after the 60-second cooldown |
-| `POST` | `/api/v1/auth/login` | Sign in, issue a 15-minute access token and an HttpOnly 7-day refresh cookie |
-| `POST` | `/api/v1/auth/refresh` | Rotate the refresh session and issue a new access token |
-| `POST` | `/api/v1/auth/logout` | Revoke the current refresh session and clear its cookie |
-| `POST` | `/api/v1/auth/forgot-password` | Request a password-reset code without revealing account existence |
-| `POST` | `/api/v1/auth/reset-password` | Verify a reset code, change the password and revoke active sessions |
-| `GET` | `/api/v1/users/me` | Return the authenticated user's profile |
-| `PATCH` | `/api/v1/users/me` | Update name, phone, and bio |
-| `POST` | `/api/v1/users/me/avatar` | Upload an authenticated user's avatar as multipart field `avatar` |
+| Method  | Endpoint                       | Purpose                                                                      |
+| ------- | ------------------------------ | ---------------------------------------------------------------------------- |
+| `POST`  | `/api/v1/auth/signup`          | Create an unverified account and send an email code                          |
+| `POST`  | `/api/v1/auth/verify-otp`      | Verify the 6-digit code (5-minute expiry; locked after 3 wrong attempts)     |
+| `POST`  | `/api/v1/auth/resend-otp`      | Resend a code after the 60-second cooldown                                   |
+| `POST`  | `/api/v1/auth/login`           | Sign in, issue a 15-minute access token and an HttpOnly 7-day refresh cookie |
+| `POST`  | `/api/v1/auth/refresh`         | Rotate the refresh session and issue a new access token                      |
+| `POST`  | `/api/v1/auth/logout`          | Revoke the current refresh session and clear its cookie                      |
+| `POST`  | `/api/v1/auth/forgot-password` | Request a password-reset code without revealing account existence            |
+| `POST`  | `/api/v1/auth/reset-password`  | Verify a reset code, change the password and revoke active sessions          |
+| `GET`   | `/api/v1/users/me`             | Return the authenticated user's profile                                      |
+| `PATCH` | `/api/v1/users/me`             | Update name, username, phone, and bio                                        |
+| `POST`  | `/api/v1/users/me/avatar`      | Upload an authenticated user's avatar as multipart field `avatar`            |
+| `GET`   | `/api/v1/users/search?username=` | Search one exact username without exposing email or phone                   |
 
-Auth routes use input validation and IP-based rate limits. Socket.IO connections require an access token in the handshake `auth.token` field. Authenticated clients receive `presence:update` events when visible users come online or go offline. Presence connections are currently tracked in one backend process; run a single realtime instance until a Redis Socket.IO adapter/shared presence store is configured for horizontal scaling. On startup, stale database presence flags are reset.
+Phase 1.5 friend endpoints include `POST /api/v1/friends/request`,
+`GET /api/v1/friends/requests`, `POST /api/v1/friends/requests/:id/accept`,
+`POST /api/v1/friends/requests/:id/reject`, `DELETE /api/v1/friends/requests/:id`,
+`GET /api/v1/friends`, `GET /api/v1/friends/blocked`, `DELETE /api/v1/friends/:userId`, and
+`POST/DELETE /api/v1/friends/:userId/block`. Friend requests and accepted/removed status changes are
+sent over Socket.IO. Three rejections trigger a seven-day request cooldown. Unfriending preserves
+chat history but prevents new messages; blocking also hides and denies the conversation.
+
+Auth routes use input validation and IP-based rate limits. Socket.IO connections require an access token in the handshake `auth.token` field. Accepted friends receive `presence:update` events when online visibility is enabled. Presence connections are currently tracked in one backend process; run a single realtime instance until a Redis Socket.IO adapter/shared presence store is configured for horizontal scaling. On startup, stale database presence flags are reset.
 
 The frontend keeps each screen and shared auth UI element in its own JSX file: `Login.jsx`, `Signup.jsx`, `VerifyEmail.jsx`, `ForgotPassword.jsx`, `ResetPassword.jsx`, and `Profile.jsx`, with reusable auth form, header, and route-guard components. Refresh tokens are not stored in local storage.
 
 Run backend tests and checks with `npm test`, `npm run lint`, and `npm run format:check` from `backend/`. Run the frontend checks with `npm run lint`, `npm run format:check`, and `npm run build` from `frontend/`.
+
+## Phase 2 direct chat
+
+The chat UI lives at `/chat`. The backend exposes authenticated `GET /api/v1/conversations`,
+`POST /api/v1/conversations`, paginated `GET /api/v1/conversations/:id/messages`, text
+`POST /api/v1/messages`, media `POST /api/v1/messages/upload`, and
+`DELETE /api/v1/messages/:id?for=me|all`. Socket.IO supports `chat:join`, `message:send`,
+`message:new`, `message:delivered`, and `message:seen`. Messages use server timestamps and 30-item
+cursor pages; `clientMessageId` makes retries idempotent.
+
+Direct conversations require an accepted `Friendship` record and are blocked in either direction when
+a `Block` record exists. `GET /api/v1/friends` supplies accepted friends to the chat sidebar. The chat
+sidebar includes exact-username search, friend/request tabs, accept/reject/cancel, unfriend, block, and
+unblock actions. Media uploads use Cloudinary and validate file signatures; images are capped at
+10 MB and video/audio/PDF files at 50 MB. Push notifications are opt-in and require the Firebase
+browser values in `frontend/.env` plus backend FCM credentials.
 
 ## Backend dependencies
 

@@ -8,6 +8,8 @@ const { getAllowedOrigins } = require('./config/cors');
 const errorHandler = require('./middlewares/errorHandler');
 const notFound = require('./middlewares/notFound');
 const authRoutes = require('./routes/authRoutes');
+const chatRoutes = require('./routes/chatRoutes');
+const friendsRoutes = require('./routes/friendsRoutes');
 const userRoutes = require('./routes/userRoutes');
 
 const createApp = () => {
@@ -46,6 +48,8 @@ const createApp = () => {
   });
 
   app.use('/api/v1/auth', authRoutes);
+  app.use('/api/v1', chatRoutes);
+  app.use('/api/v1/friends', friendsRoutes);
   app.use('/api/v1/users', userRoutes);
   app.use(notFound);
   app.use(errorHandler);

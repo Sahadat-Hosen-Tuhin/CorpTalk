@@ -1,10 +1,13 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { getAuthErrorMessage, useAuthStore } from '../stores/authStore.js';
+import { createChatSocket } from '../services/chatSocket.js';
+import { getAccessToken } from '../services/apiClient.js';
+import { getFriendRequests } from '../services/chatApi.js';
 import FormAlert from './FormAlert.jsx';
 
 const linkClass = ({ isActive }) =>
-  `rounded-full px-4 py-2 text-sm font-medium transition-colors ${
+  `rounded-full px-2 py-2 text-xs font-medium transition-colors sm:px-4 sm:text-sm ${
     isActive
       ? 'bg-brand-primary-soft text-brand-primary-text'
       : 'text-text-muted hover:bg-surface hover:text-heading'
@@ -15,6 +18,46 @@ function AppLayout() {
   const logout = useAuthStore((state) => state.logout);
   const navigate = useNavigate();
   const [logoutError, setLogoutError] = useState('');
+  const [friendRequestCount, setFriendRequestCount] = useState(0);
+  const [friendNotice, setFriendNotice] = useState('');
+
+  useEffect(() => {
+    if (!user?.id) return undefined;
+    let active = true;
+    const refreshRequestCount = () => {
+      getFriendRequests()
+        .then((requests) => {
+          if (active) setFriendRequestCount(requests.incoming.length);
+        })
+        .catch((error) => {
+          console.error('Could not refresh friend request count', error);
+        });
+    };
+    const socket = createChatSocket();
+    const handleFriendRequest = (request) => {
+      setFriendNotice(`${request.user.name} sent you a friend request.`);
+      refreshRequestCount();
+    };
+    const refreshSocketAuth = (event) => {
+      socket.auth = { token: event?.detail?.accessToken ? event.detail.accessToken : getAccessToken() };
+      socket.disconnect();
+      socket.connect();
+    };
+    socket.on('friend:request', handleFriendRequest);
+    socket.on('friend:accepted', refreshRequestCount);
+    socket.on('friend:removed', refreshRequestCount);
+    window.addEventListener('corptalk:auth-refreshed', refreshSocketAuth);
+    refreshRequestCount();
+
+    return () => {
+      active = false;
+      window.removeEventListener('corptalk:auth-refreshed', refreshSocketAuth);
+      socket.off('friend:request', handleFriendRequest);
+      socket.off('friend:accepted', refreshRequestCount);
+      socket.off('friend:removed', refreshRequestCount);
+      socket.disconnect();
+    };
+  }, [user?.id]);
 
   const handleLogout = async () => {
     setLogoutError('');
@@ -46,9 +89,20 @@ function AppLayout() {
             <span className="text-lg font-semibold tracking-tight text-heading">CorpTalk</span>
           </NavLink>
 
-          <nav className="flex items-center gap-1" aria-label="Main navigation">
+          <nav
+            className="flex max-w-[75%] flex-wrap items-center justify-end gap-0.5 sm:max-w-none sm:gap-1"
+            aria-label="Main navigation"
+          >
             <NavLink to="/dashboard" className={linkClass}>
               Dashboard
+            </NavLink>
+            <NavLink to="/chat" className={linkClass}>
+              Chat
+              {friendRequestCount > 0 && (
+                <span className="ml-1 rounded-full bg-brand-primary px-1.5 py-0.5 text-[10px] text-on-primary">
+                  {friendRequestCount}
+                </span>
+              )}
             </NavLink>
             <NavLink to="/profile" className={linkClass}>
               Profile
@@ -56,7 +110,10 @@ function AppLayout() {
             <NavLink to="/setup" className={linkClass}>
               Setup
             </NavLink>
-            <span className="hidden px-2 text-sm text-text-muted md:inline">{user?.name}</span>
+            <span className="hidden px-2 text-right text-sm text-text-muted md:inline">
+              {user?.name}
+              {user?.username && <span className="block text-xs">@{user.username}</span>}
+            </span>
             <button
               type="button"
               onClick={handleLogout}
@@ -67,6 +124,17 @@ function AppLayout() {
           </nav>
         </header>
 
+        {friendNotice && (
+          <div
+            role="status"
+            className="mt-3 flex items-center justify-between gap-3 rounded-xl bg-brand-primary-soft px-4 py-2 text-sm text-brand-primary-text"
+          >
+            <span>{friendNotice}</span>
+            <button type="button" onClick={() => setFriendNotice('')}>
+              Dismiss
+            </button>
+          </div>
+        )}
         <FormAlert>{logoutError}</FormAlert>
         <main className="flex-1 py-10 sm:py-14">
           <Outlet />

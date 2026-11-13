@@ -1,6 +1,7 @@
 const toPublicUser = (user) => ({
   id: user._id.toString(),
   name: user.name,
+  username: user.username || null,
   email: user.email,
   phone: user.phone || null,
   avatar: user.avatar,

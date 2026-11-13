@@ -23,7 +23,12 @@ function Profile() {
     formState: { errors },
   } = useForm({
     resolver: zodResolver(profileSchema),
-    defaultValues: { name: user.name, bio: user.bio || '', phone: user.phone || '' },
+    defaultValues: {
+      name: user.name,
+      username: user.username || '',
+      bio: user.bio || '',
+      phone: user.phone || '',
+    },
   });
 
   const onSubmit = async (values) => {
@@ -31,7 +36,9 @@ function Profile() {
     setProfileSaved(false);
     setSaving(true);
     try {
-      await updateProfile({ ...values, phone: values.phone || null });
+      const updates = { ...values, phone: values.phone || null };
+      if (!updates.username) delete updates.username;
+      await updateProfile(updates);
       setProfileSaved(true);
     } catch (error) {
       setProfileError(getAuthErrorMessage(error));
@@ -96,6 +103,17 @@ function Profile() {
             register={register('name')}
             error={errors.name?.message}
           />
+          <AuthField
+            id="username"
+            label="Username"
+            autoComplete="username"
+            placeholder="e.g. rahim_01"
+            register={register('username')}
+            error={errors.username?.message}
+          />
+          <p className="-mt-3 text-xs text-text-muted">
+            Friends can find you by this unique username. You can change it later if available.
+          </p>
           <div>
             <label htmlFor="email" className="mb-1.5 block text-sm font-medium text-heading">
               Work email

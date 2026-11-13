@@ -148,6 +148,9 @@ const updateProfile = async (userId, updates) => {
   try {
     await user.save();
   } catch (error) {
+    if (error.code === 11000 && error.keyPattern && error.keyPattern.username) {
+      throw new AppError(409, 'USERNAME_ALREADY_TAKEN', 'This username is already in use');
+    }
     if (error.code === 11000 && error.keyPattern && error.keyPattern.phone) {
       throw new AppError(409, 'PHONE_ALREADY_REGISTERED', 'This phone number is already in use');
     }
@@ -168,6 +171,21 @@ const setAvatar = async (userId, avatar, avatarPublicId) => {
   return { user: toPublicUser(user), previousPublicId };
 };
 
+const updatePushToken = async (userId, token) => {
+  const user = await User.findByIdAndUpdate(
+    userId,
+    { $addToSet: { pushTokens: token } },
+    { new: true, runValidators: true },
+  );
+  if (!user) {
+    throw new AppError(404, 'USER_NOT_FOUND', 'User not found');
+  }
+};
+
+const removePushToken = async (userId, token) => {
+  await User.updateOne({ _id: userId }, { $pull: { pushTokens: token } });
+};
+
 module.exports = {
   getProfile,
   login,
@@ -176,8 +194,10 @@ module.exports = {
   requestPasswordReset,
   resendVerification,
   resetPassword,
+  removePushToken,
   setAvatar,
   signup,
+  updatePushToken,
   updateProfile,
   verifyEmail,
 };

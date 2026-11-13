@@ -1,5 +1,6 @@
 const { Server } = require('socket.io');
 const { getAllowedOrigins } = require('../config/cors');
+const Friendship = require('../models/friendship');
 const User = require('../models/user');
 const { authenticateAccessToken } = require('../services/tokenService');
 const {
@@ -8,6 +9,31 @@ const {
   disconnectUser,
 } = require('../services/presenceService');
 const AppError = require('../utils/AppError');
+const attachChatSocket = require('./chatSocket');
+
+const emitPresenceToFriends = async (io, user, presence) => {
+  const friendships = await Friendship.find({
+    status: 'accepted',
+    $or: [{ requester: user._id }, { recipient: user._id }],
+  }).select('requester recipient');
+  const friendIds = friendships.map((friendship) =>
+    friendship.requester.toString() === user._id.toString()
+      ? friendship.recipient.toString()
+      : friendship.requester.toString(),
+  );
+  const lastSeen =
+    user.privacy.lastSeenVisibility === 'nobody' ||
+    (user.privacy.lastSeenVisibility === 'friends' && !friendIds.length)
+      ? null
+      : presence.lastSeen;
+  for (const friendId of friendIds) {
+    io.to(`user:${friendId}`).emit('presence:update', {
+      userId: user._id.toString(),
+      online: presence.online,
+      lastSeen,
+    });
+  }
+};
 
 const createSocketServer = (httpServer) => {
   const io = new Server(httpServer, {
@@ -47,15 +73,16 @@ const createSocketServer = (httpServer) => {
       () => socket.disconnect(true),
       Math.max(0, socket.data.accessTokenExpiresAt - Date.now()),
     );
+    attachChatSocket(io, socket);
 
     if (becameOnline) {
       void User.updateOne({ _id: user._id }, { $set: { isOnline: true } })
-        .then((result) => {
+        .then(async (result) => {
           if (result.matchedCount !== 1) {
             throw new Error('Authenticated user disappeared before presence was recorded');
           }
           if (user.privacy.showOnlineStatus) {
-            io.emit('presence:update', { userId, online: true, lastSeen: null });
+            await emitPresenceToFriends(io, user, { online: true, lastSeen: null });
           }
         })
         .catch((error) => {
@@ -86,13 +113,9 @@ const createSocketServer = (httpServer) => {
 
       const lastSeen = new Date();
       void User.updateOne({ _id: user._id }, { $set: { isOnline: false, lastSeen } })
-        .then((result) => {
+        .then(async (result) => {
           if (result.matchedCount === 1 && user.privacy.showOnlineStatus) {
-            io.emit('presence:update', {
-              userId,
-              online: false,
-              lastSeen: user.privacy.lastSeenVisibility === 'everyone' ? lastSeen : null,
-            });
+            await emitPresenceToFriends(io, user, { online: false, lastSeen });
           }
         })
         .catch((error) => {

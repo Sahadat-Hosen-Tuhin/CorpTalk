@@ -22,6 +22,13 @@ describe('HTTP foundation', () => {
     expect(response.body.error.code).toBe('NOT_FOUND');
   });
 
+  test('does not require authentication for unknown API routes', async () => {
+    const response = await request(app).get('/api/v1/unknown');
+
+    expect(response.status).toBe(404);
+    expect(response.body.error.code).toBe('NOT_FOUND');
+  });
+
   test('rejects malformed JSON with a client error', async () => {
     const response = await request(app)
       .post('/api/missing')

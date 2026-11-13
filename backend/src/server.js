@@ -15,8 +15,10 @@ const startServer = async () => {
     throw error;
   }
 
-  const httpServer = http.createServer(app());
+  const application = app();
+  const httpServer = http.createServer(application);
   const io = createSocketServer(httpServer);
+  application.set('io', io);
   const port = Number(process.env.PORT || 5000);
 
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
