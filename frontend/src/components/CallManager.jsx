@@ -14,6 +14,25 @@ import { emitChatEvent } from '../services/chatSocket.js';
 
 const stopStream = (stream) => stream?.getTracks().forEach((track) => track.stop());
 
+function CallAvatar({ peer }) {
+  const [imageFailed, setImageFailed] = useState(false);
+
+  return (
+    <div className="grid h-24 w-24 place-items-center overflow-hidden rounded-full bg-brand-primary/30 text-3xl font-semibold">
+      {peer?.avatar && !imageFailed ? (
+        <img
+          src={peer.avatar}
+          alt=""
+          className="h-full w-full object-cover"
+          onError={() => setImageFailed(true)}
+        />
+      ) : (
+        peer?.name?.slice(0, 1)?.toUpperCase() || '?'
+      )}
+    </div>
+  );
+}
+
 function CallManager({ socket, user }) {
   const [call, setCall] = useState(null);
   const [callError, setCallError] = useState('');
@@ -448,9 +467,7 @@ function CallManager({ socket, user }) {
           )}
           <div className="relative z-10 flex flex-col items-center gap-3 rounded-3xl bg-slate-950/75 px-8 py-10 backdrop-blur-sm">
             {call.type === 'video' && connectionState === 'connected' && remoteStream ? null : (
-              <div className="grid h-24 w-24 place-items-center rounded-full bg-brand-primary/30 text-3xl font-semibold">
-                {call.peer?.name?.slice(0, 1)?.toUpperCase() || '?'}
-              </div>
+              <CallAvatar key={call.callId || call.peer?.id} peer={call.peer} />
             )}
             <h2 className="text-2xl font-semibold">{call.peer?.name || 'Contact'}</h2>
             <p className="text-sm text-slate-200">
