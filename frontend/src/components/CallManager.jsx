@@ -465,30 +465,40 @@ function CallManager({ socket, user }) {
               />
             </>
           )}
-          <div className="relative z-10 flex flex-col items-center gap-3 rounded-3xl bg-slate-950/75 px-8 py-10 backdrop-blur-sm">
-            {call.type === 'video' && connectionState === 'connected' && remoteStream ? null : (
-              <CallAvatar key={call.callId || call.peer?.id} peer={call.peer} />
-            )}
-            <h2 className="text-2xl font-semibold">{call.peer?.name || 'Contact'}</h2>
-            <p className="text-sm text-slate-200">
-              {call.status === 'incoming'
-                ? `Incoming ${call.type} call`
-                : connectionState === 'connected'
-                  ? `${Math.floor(elapsedSeconds / 60)}:${String(elapsedSeconds % 60).padStart(2, '0')}`
-                  : call.status === 'ringing' || call.status === 'starting'
-                    ? 'Calling…'
-                    : connectionState === 'reconnecting'
-                      ? 'Reconnecting…'
-                      : connectionState === 'failed'
-                        ? 'Connection failed'
-                        : 'Connecting…'}
-            </p>
-            {callError && (
-              <p role="alert" className="max-w-sm text-sm text-red-300">
-                {callError}
+          {call.type === 'video' && connectionState === 'connected' && remoteStream ? (
+            <div className="absolute left-4 top-4 z-10 rounded-xl bg-slate-950/65 px-3 py-2 text-left backdrop-blur-sm sm:left-8 sm:top-8">
+              <h2 className="text-sm font-semibold">{call.peer?.name || 'Contact'}</h2>
+              <p className="mt-0.5 text-xs text-slate-200">
+                {Math.floor(elapsedSeconds / 60)}:{String(elapsedSeconds % 60).padStart(2, '0')}
               </p>
-            )}
-          </div>
+            </div>
+          ) : (
+            <div className="relative z-10 flex flex-col items-center gap-3 rounded-3xl bg-slate-950/75 px-8 py-10 backdrop-blur-sm">
+              <CallAvatar key={call.callId || call.peer?.id} peer={call.peer} />
+              <h2 className="text-2xl font-semibold">{call.peer?.name || 'Contact'}</h2>
+              <p className="text-sm text-slate-200">
+                {call.status === 'incoming'
+                  ? `Incoming ${call.type} call`
+                  : connectionState === 'connected'
+                    ? `${Math.floor(elapsedSeconds / 60)}:${String(elapsedSeconds % 60).padStart(2, '0')}`
+                    : call.status === 'ringing' || call.status === 'starting'
+                      ? 'Calling…'
+                      : connectionState === 'reconnecting'
+                        ? 'Reconnecting…'
+                        : connectionState === 'failed'
+                          ? 'Connection failed'
+                          : 'Connecting…'}
+              </p>
+            </div>
+          )}
+          {callError && (
+            <p
+              role="alert"
+              className="absolute left-1/2 top-20 z-20 -translate-x-1/2 rounded-lg bg-slate-950/80 px-4 py-2 text-sm text-red-300 backdrop-blur-sm"
+            >
+              {callError}
+            </p>
+          )}
           <div className="absolute bottom-8 z-20 flex items-center gap-4">
             {call.status === 'incoming' ? (
               <>
