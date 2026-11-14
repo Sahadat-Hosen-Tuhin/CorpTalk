@@ -7,16 +7,23 @@ import {
   Check,
   MessageCircle,
   MoreHorizontal,
+  Phone,
+  Pin,
+  Plus,
   Search,
   Send,
   UserRound,
   UserRoundMinus,
   UserRoundPlus,
+  Users,
+  Video,
   X,
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import ChatComposer from '../features/chat/ChatComposer.jsx';
 import MessageBubble from '../features/chat/MessageBubble.jsx';
+import CreateGroupDialog from '../components/CreateGroupDialog.jsx';
+import GroupInfoDialog from '../components/GroupInfoDialog.jsx';
 import {
   createDirectConversation,
   acceptFriendRequest,
@@ -28,11 +35,21 @@ import {
   getFriendRequests,
   getFriends,
   getMessages,
+  getPinnedMessages,
+  getStarredMessages,
   rejectFriendRequest,
   removeFriend,
   searchUsers,
   sendFriendRequest,
   sendMessageFile,
+  editMessage,
+  forwardMessage,
+  pinMessage,
+  unpinMessage,
+  reactToMessage,
+  reportUser,
+  searchMessages,
+  toggleStarMessage,
   unblockFriend,
 } from '../services/chatApi.js';
 import { emitChatEvent, createChatSocket } from '../services/chatSocket.js';
@@ -70,6 +87,16 @@ function ChatPage() {
   const [replyTo, setReplyTo] = useState(null);
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [createGroupOpen, setCreateGroupOpen] = useState(false);
+  const [groupInfoOpen, setGroupInfoOpen] = useState(false);
+  const [typingUsers, setTypingUsers] = useState([]);
+  const [pinnedMessages, setPinnedMessages] = useState([]);
+  const [starredIds, setStarredIds] = useState(new Set());
+  const [messageSearchOpen, setMessageSearchOpen] = useState(false);
+  const [messageSearchQuery, setMessageSearchQuery] = useState('');
+  const [messageSearchResults, setMessageSearchResults] = useState([]);
+  const [forwardingMessage, setForwardingMessage] = useState(null);
+  const [actionNotice, setActionNotice] = useState('');
   const scrollRef = useRef(null);
   const socketRef = useRef(null);
   const selectedIdRef = useRef(selectedId);
@@ -78,6 +105,7 @@ function ChatPage() {
   const previewUrlsRef = useRef(new Map());
   const loadingOlderRef = useRef(false);
   const stickToBottomRef = useRef(true);
+  const typingTimersRef = useRef(new Map());
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
@@ -89,6 +117,11 @@ function ChatPage() {
     () => conversations.find((conversation) => conversation.id === selectedId),
     [conversations, selectedId],
   );
+  const activeConversationRef = useRef(activeConversation);
+
+  useEffect(() => {
+    activeConversationRef.current = activeConversation;
+  }, [activeConversation]);
   const filteredConversations = useMemo(() => {
     const query = search.trim().toLowerCase();
     if (!query) return conversations;
@@ -141,6 +174,22 @@ function ChatPage() {
       })),
     );
   };
+
+  const startTyping = useCallback(() => {
+    const socket = socketRef.current;
+    const conversationId = selectedIdRef.current;
+    if (socket?.connected && conversationId) {
+      socket.emit('typing:start', { conversationId });
+    }
+  }, []);
+
+  const stopTyping = useCallback(() => {
+    const socket = socketRef.current;
+    const conversationId = selectedIdRef.current;
+    if (socket?.connected && conversationId) {
+      socket.emit('typing:stop', { conversationId });
+    }
+  }, []);
 
   const performFriendAction = async (action, refreshSearch = false) => {
     setError('');
@@ -208,6 +257,7 @@ function ChatPage() {
   }, [refreshLists, routeConversationId]);
 
   useEffect(() => {
+    const typingTimers = typingTimersRef.current;
     let socket;
     try {
       socket = createChatSocket();
@@ -238,8 +288,43 @@ function ChatPage() {
       }
       refresh();
     };
-    const handleDelivery = ({ userId, count }) => {
-      if (!count || userId === user.id) return;
+    const updateReceiptForGroupMessages = (conversationId, userId, at, readAt) => {
+      if (conversationId !== selectedIdRef.current) return;
+      const readTime = at || new Date().toISOString();
+      setMessages((current) =>
+        current.map((message) => {
+          if (
+            !isOwnMessage(message, user.id) ||
+            new Date(message.createdAt).getTime() > new Date(readTime).getTime()
+          ) {
+            return message;
+          }
+          const receipts = [...(message.receipts || [])];
+          const receiptIndex = receipts.findIndex((item) => item.userId?.toString() === userId);
+          if (receiptIndex >= 0) {
+            const receipt = receipts[receiptIndex];
+            receipts[receiptIndex] = {
+              ...receipt,
+              deliveredAt: receipt.deliveredAt || readTime,
+              readAt: readAt ? readTime : receipt.readAt,
+            };
+          } else {
+            receipts.push({ userId, deliveredAt: readTime, readAt: readAt ? readTime : null });
+          }
+          return {
+            ...message,
+            receipts,
+            status: readAt ? 'seen' : message.status === 'seen' ? 'seen' : 'delivered',
+          };
+        }),
+      );
+    };
+    const handleDelivery = ({ conversationId, userId, count, at }) => {
+      if (!count || userId === user.id || conversationId !== selectedIdRef.current) return;
+      if (activeConversationRef.current?.type === 'group') {
+        updateReceiptForGroupMessages(conversationId, userId, at, false);
+        return;
+      }
       setMessages((current) =>
         current.map((message) =>
           isOwnMessage(message, user.id) && message.status !== 'seen'
@@ -248,8 +333,12 @@ function ChatPage() {
         ),
       );
     };
-    const handleSeen = ({ userId, count }) => {
-      if (!count || userId === user.id) return;
+    const handleSeen = ({ conversationId, userId, count, at }) => {
+      if (!count || userId === user.id || conversationId !== selectedIdRef.current) return;
+      if (activeConversationRef.current?.type === 'group') {
+        updateReceiptForGroupMessages(conversationId, userId, at, true);
+        return;
+      }
       setMessages((current) =>
         current.map((message) =>
           isOwnMessage(message, user.id) ? { ...message, status: 'seen' } : message,
@@ -266,6 +355,46 @@ function ChatPage() {
         return upsertMessage(current, message);
       });
     };
+    const handleMessageChanged = (message) => {
+      if (message.conversationId !== selectedIdRef.current) return;
+      setMessages((current) => upsertMessage(current, { ...message, currentUserId: user.id }));
+    };
+    const handlePinsUpdated = ({ conversationId, messages: pins }) => {
+      if (conversationId === selectedIdRef.current) setPinnedMessages(pins);
+    };
+    const handleTypingStart = ({ conversationId, userId, name }) => {
+      if (conversationId !== selectedIdRef.current || userId === user.id) return;
+      const previousTimer = typingTimersRef.current.get(userId);
+      if (previousTimer) clearTimeout(previousTimer);
+      setTypingUsers((current) => [
+        ...current.filter((item) => item.userId !== userId),
+        { userId, name },
+      ]);
+      typingTimersRef.current.set(
+        userId,
+        window.setTimeout(() => {
+          setTypingUsers((current) => current.filter((item) => item.userId !== userId));
+          typingTimersRef.current.delete(userId);
+        }, 5000),
+      );
+    };
+    const handleTypingStop = ({ conversationId, userId }) => {
+      if (conversationId !== selectedIdRef.current) return;
+      const timer = typingTimersRef.current.get(userId);
+      if (timer) clearTimeout(timer);
+      typingTimersRef.current.delete(userId);
+      setTypingUsers((current) => current.filter((item) => item.userId !== userId));
+    };
+    const handleGroupRemoved = ({ conversationId }) => {
+      if (conversationId !== selectedIdRef.current) return;
+      selectedIdRef.current = '';
+      setSelectedId('');
+      setMessages([]);
+      setGroupInfoOpen(false);
+      setSidebarVisible(true);
+      setError('You are no longer a member of this group.');
+      refresh();
+    };
     const refreshSocketAuth = () => {
       socket.auth = { token: getAccessToken() };
       socket.disconnect();
@@ -279,6 +408,12 @@ function ChatPage() {
     socket.on('message:delivered', handleDelivery);
     socket.on('message:seen', handleSeen);
     socket.on('message:deleted', handleDeleted);
+    socket.on('message:edited', handleMessageChanged);
+    socket.on('message:reaction', handleMessageChanged);
+    socket.on('conversation:pins-updated', handlePinsUpdated);
+    socket.on('typing:start', handleTypingStart);
+    socket.on('typing:stop', handleTypingStop);
+    socket.on('group:removed', handleGroupRemoved);
     socket.on('presence:update', handlePresence);
     socket.on('friend:request', refresh);
     socket.on('friend:accepted', refresh);
@@ -287,6 +422,8 @@ function ChatPage() {
 
     return () => {
       window.removeEventListener('corptalk:auth-refreshed', refreshSocketAuth);
+      for (const timer of typingTimers.values()) clearTimeout(timer);
+      typingTimers.clear();
       if (selectedIdRef.current) {
         socket.emit('chat:leave', { conversationId: selectedIdRef.current });
       }
@@ -299,10 +436,12 @@ function ChatPage() {
   useEffect(() => {
     if (!selectedId) return undefined;
     let active = true;
-    getMessages(selectedId)
-      .then((result) => {
+    Promise.all([getMessages(selectedId), getPinnedMessages(selectedId), getStarredMessages()])
+      .then(([result, pins, starred]) => {
         if (!active) return;
         setMessages(result.messages.map((message) => ({ ...message, currentUserId: user.id })));
+        setPinnedMessages(pins);
+        setStarredIds(new Set(starred.map((message) => message._id)));
         setHasMore(result.hasMore);
         setNextCursor(result.nextCursor);
         requestAnimationFrame(() => {
@@ -353,9 +492,11 @@ function ChatPage() {
     try {
       const conversation = await createDirectConversation(friend.id);
       await refreshLists();
+      stopTyping();
       if (selectedIdRef.current && socketRef.current?.connected) {
         socketRef.current.emit('chat:leave', { conversationId: selectedIdRef.current });
       }
+      setTypingUsers([]);
       setMessages([]);
       setLoadingMessages(true);
       stickToBottomRef.current = true;
@@ -367,14 +508,25 @@ function ChatPage() {
   };
 
   const selectConversation = (conversationId) => {
+    stopTyping();
     if (selectedIdRef.current && socketRef.current?.connected) {
       socketRef.current.emit('chat:leave', { conversationId: selectedIdRef.current });
     }
     setMessages([]);
     setLoadingMessages(true);
     stickToBottomRef.current = true;
+    setTypingUsers([]);
     setSelectedId(conversationId);
     setSidebarVisible(false);
+  };
+
+  const handleLeftGroup = async () => {
+    setGroupInfoOpen(false);
+    selectedIdRef.current = '';
+    setSelectedId('');
+    setMessages([]);
+    setSidebarVisible(true);
+    await refreshLists();
   };
 
   const addMessage = (message) => {
@@ -515,6 +667,104 @@ function ChatPage() {
     }
   };
 
+  const handleEdit = async (message) => {
+    const text = window.prompt('Edit message', message.text);
+    if (text === null || !text.trim() || text.trim() === message.text) return;
+    try {
+      const updated = await editMessage(message._id, text.trim());
+      addMessage({ ...updated, currentUserId: user.id });
+      await refreshLists();
+    } catch (requestError) {
+      setError(requestError.response?.data?.error?.message || requestError.message);
+    }
+  };
+
+  const handleReaction = async (message, emoji) => {
+    try {
+      const updated = await reactToMessage(message._id, emoji);
+      addMessage({ ...updated, currentUserId: user.id });
+    } catch (requestError) {
+      setError(requestError.response?.data?.error?.message || requestError.message);
+    }
+  };
+
+  const handlePin = async (message) => {
+    try {
+      const isPinned = pinnedMessages.some((pin) => pin._id === message._id);
+      const pins = isPinned
+        ? await unpinMessage(selectedId, message._id)
+        : await pinMessage(selectedId, message._id);
+      setPinnedMessages(pins);
+    } catch (requestError) {
+      setError(requestError.response?.data?.error?.message || requestError.message);
+    }
+  };
+
+  const handleStar = async (message) => {
+    try {
+      const starred = await toggleStarMessage(message._id);
+      setStarredIds((current) => {
+        const next = new Set(current);
+        if (starred) next.add(message._id);
+        else next.delete(message._id);
+        return next;
+      });
+    } catch (requestError) {
+      setError(requestError.response?.data?.error?.message || requestError.message);
+    }
+  };
+
+  const handleReport = async (message) => {
+    const details = window.prompt('Tell us why you are reporting this message (optional).');
+    if (details === null) return;
+    try {
+      await reportUser({
+        reportedUserId: message.sender.id || message.sender._id,
+        messageId: message._id,
+        reason: 'other',
+        details,
+      });
+      setActionNotice('Report submitted for review.');
+    } catch (requestError) {
+      setError(requestError.response?.data?.error?.message || requestError.message);
+    }
+  };
+
+  const handleForward = async (conversationId) => {
+    if (!forwardingMessage) return;
+    try {
+      const forwarded = await forwardMessage(forwardingMessage._id, conversationId);
+      if (conversationId === selectedId) addMessage({ ...forwarded, currentUserId: user.id });
+      setForwardingMessage(null);
+      setActionNotice('Message forwarded.');
+      await refreshLists();
+    } catch (requestError) {
+      setError(requestError.response?.data?.error?.message || requestError.message);
+    }
+  };
+
+  const runMessageSearch = async (event) => {
+    event.preventDefault();
+    if (!selectedId || messageSearchQuery.trim().length < 2) return;
+    try {
+      setMessageSearchResults(await searchMessages(selectedId, messageSearchQuery.trim()));
+    } catch (requestError) {
+      setError(requestError.response?.data?.error?.message || requestError.message);
+    }
+  };
+
+  const openSearchResult = (message) => {
+    setMessages((current) =>
+      sortMessages([
+        ...current.filter((item) => item._id !== message._id),
+        { ...message, currentUserId: user.id },
+      ]),
+    );
+    requestAnimationFrame(() =>
+      document.getElementById(`message-${message._id}`)?.scrollIntoView({ behavior: 'smooth' }),
+    );
+  };
+
   const loadOlderMessages = async () => {
     if (!selectedId || !hasMore || !nextCursor || loadingOlderRef.current) return;
     const scroller = scrollRef.current;
@@ -590,15 +840,26 @@ function ChatPage() {
               </p>
               <h1 className="mt-1 text-2xl font-semibold text-heading">Chats</h1>
             </div>
-            <button
-              type="button"
-              onClick={handleEnableNotifications}
-              title="Enable offline notifications"
-              aria-label="Enable offline notifications"
-              className="rounded-full p-2 text-text-muted hover:bg-surface hover:text-heading"
-            >
-              <Bell size={19} className={notificationsEnabled ? 'text-brand-primary' : ''} />
-            </button>
+            <div className="flex items-center">
+              <button
+                type="button"
+                onClick={() => setCreateGroupOpen(true)}
+                title="Create a group"
+                aria-label="Create a group"
+                className="rounded-full p-2 text-text-muted hover:bg-surface hover:text-heading"
+              >
+                <Plus size={19} />
+              </button>
+              <button
+                type="button"
+                onClick={handleEnableNotifications}
+                title="Enable offline notifications"
+                aria-label="Enable offline notifications"
+                className="rounded-full p-2 text-text-muted hover:bg-surface hover:text-heading"
+              >
+                <Bell size={19} className={notificationsEnabled ? 'text-brand-primary' : ''} />
+              </button>
+            </div>
           </div>
           <label className="mt-4 flex items-center gap-2 rounded-xl border border-border bg-bg-subtle px-3 py-2.5">
             <Search size={17} className="text-text-muted" />
@@ -647,6 +908,17 @@ function ChatPage() {
                         : ''}
                     </span>
                   </div>
+                  <button
+                    type="button"
+                    aria-label="Search messages in this chat"
+                    onClick={() => {
+                      setMessageSearchOpen((current) => !current);
+                      setMessageSearchResults([]);
+                    }}
+                    className="rounded-full p-2 text-text-muted hover:bg-surface hover:text-heading"
+                  >
+                    <Search size={19} />
+                  </button>
                   <div className="mt-1 flex items-center justify-between gap-2">
                     <span className="truncate text-xs text-text-muted">
                       {conversation.lastMessage?.preview || 'Start a conversation'}
@@ -951,23 +1223,158 @@ function ChatPage() {
                   {activeConversation.participant.name}
                 </h2>
                 <p className="text-xs text-text-muted">
-                  {activeConversation.participant.isOnline
-                    ? 'Online'
-                    : activeConversation.participant.lastSeen
-                      ? `Last seen ${formatDistanceToNow(new Date(activeConversation.participant.lastSeen), { addSuffix: true })}`
-                      : 'Offline'}
+                  {typingUsers.length
+                    ? `${typingUsers.map((item) => item.name).join(', ')} typing…`
+                    : activeConversation.type === 'group'
+                      ? `${activeConversation.members.length} members`
+                      : activeConversation.participant.isOnline
+                        ? 'Online'
+                        : activeConversation.participant.lastSeen
+                          ? `Last seen ${formatDistanceToNow(new Date(activeConversation.participant.lastSeen), { addSuffix: true })}`
+                          : 'Offline'}
                 </p>
               </div>
-              <button
-                type="button"
-                className="rounded-full p-2 text-text-muted hover:bg-surface"
-                aria-label="Conversation options"
-                onClick={() => setError('Conversation details will be available in a later phase.')}
-              >
-                <MoreHorizontal size={20} />
-              </button>
+              {activeConversation.type === 'group' ? (
+                <button
+                  type="button"
+                  className="rounded-full p-2 text-text-muted hover:bg-surface hover:text-brand-primary-text"
+                  aria-label="Group information and settings"
+                  onClick={() => setGroupInfoOpen(true)}
+                >
+                  <Users size={19} />
+                </button>
+              ) : (
+                activeConversation.canSend && (
+                  <>
+                    <button
+                      type="button"
+                      className="rounded-full p-2 text-text-muted hover:bg-surface hover:text-brand-primary-text"
+                      aria-label="Start voice call"
+                      onClick={() =>
+                        window.dispatchEvent(
+                          new CustomEvent('corptalk:call-invite', {
+                            detail: {
+                              recipientId: activeConversation.participant.id,
+                              recipient: activeConversation.participant,
+                              type: 'voice',
+                            },
+                          }),
+                        )
+                      }
+                    >
+                      <Phone size={19} />
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-full p-2 text-text-muted hover:bg-surface hover:text-brand-primary-text"
+                      aria-label="Start video call"
+                      onClick={() =>
+                        window.dispatchEvent(
+                          new CustomEvent('corptalk:call-invite', {
+                            detail: {
+                              recipientId: activeConversation.participant.id,
+                              recipient: activeConversation.participant,
+                              type: 'video',
+                            },
+                          }),
+                        )
+                      }
+                    >
+                      <Video size={19} />
+                    </button>
+                  </>
+                )
+              )}
+              {activeConversation.type !== 'group' && (
+                <button
+                  type="button"
+                  className="rounded-full p-2 text-text-muted hover:bg-surface"
+                  aria-label="Conversation options"
+                  onClick={() => setError('Conversation details are not available yet.')}
+                >
+                  <MoreHorizontal size={20} />
+                </button>
+              )}
             </header>
 
+            {pinnedMessages.length > 0 && (
+              <button
+                type="button"
+                onClick={() =>
+                  document
+                    .getElementById(`message-${pinnedMessages[0]._id}`)
+                    ?.scrollIntoView({ behavior: 'smooth' })
+                }
+                className="flex items-center gap-2 border-b border-border bg-bg-subtle px-4 py-2 text-left text-sm text-text"
+              >
+                <Pin size={15} className="shrink-0 text-brand-primary-text" />
+                <span className="truncate">
+                  Pinned:{' '}
+                  {pinnedMessages[0].text || pinnedMessages[0].media?.originalName || 'Attachment'}
+                </span>
+                {pinnedMessages.length > 1 && (
+                  <span className="shrink-0 text-xs text-text-muted">
+                    +{pinnedMessages.length - 1}
+                  </span>
+                )}
+              </button>
+            )}
+            {messageSearchOpen && (
+              <form onSubmit={runMessageSearch} className="border-b border-border bg-bg-subtle p-3">
+                <div className="flex gap-2">
+                  <input
+                    value={messageSearchQuery}
+                    onChange={(event) => setMessageSearchQuery(event.target.value)}
+                    minLength={2}
+                    maxLength={100}
+                    placeholder="Search in this conversation"
+                    className="min-w-0 flex-1 rounded-xl border border-border bg-bg px-3 py-2 text-sm text-text"
+                  />
+                  <button
+                    type="submit"
+                    className="rounded-xl bg-brand-primary px-3 py-2 text-sm font-semibold text-on-primary"
+                  >
+                    Search
+                  </button>
+                </div>
+                {messageSearchQuery.trim().length >= 2 && (
+                  <div className="mt-2 max-h-40 space-y-1 overflow-y-auto">
+                    {messageSearchResults.length ? (
+                      messageSearchResults.map((result) => (
+                        <button
+                          key={result._id}
+                          type="button"
+                          onClick={() => openSearchResult(result)}
+                          className="block w-full truncate rounded-lg px-3 py-2 text-left text-sm text-text hover:bg-surface"
+                        >
+                          {result.sender?.name}:{' '}
+                          {result.text || result.media?.originalName || 'Attachment'}
+                        </button>
+                      ))
+                    ) : (
+                      <p className="px-3 py-2 text-xs text-text-muted">
+                        Run a search to see matches.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </form>
+            )}
+            {actionNotice && (
+              <div
+                role="status"
+                className="border-b border-border bg-success/10 px-4 py-2 text-sm text-success"
+              >
+                {actionNotice}
+                <button
+                  type="button"
+                  className="ml-3 underline"
+                  onClick={() => setActionNotice('')}
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
             {error && (
               <div
                 role="alert"
@@ -981,8 +1388,9 @@ function ChatPage() {
                 role="status"
                 className="border-b border-border bg-bg-subtle px-4 py-2 text-sm text-text-muted"
               >
-                You can view this chat history, but messaging is unavailable because you are no
-                longer friends.
+                {activeConversation.type === 'group'
+                  ? 'Only group admins can send messages.'
+                  : 'You can view this chat history, but messaging is unavailable because you are no longer friends.'}
               </div>
             )}
 
@@ -1009,35 +1417,48 @@ function ChatPage() {
                 <p className="py-10 text-center text-sm text-text-muted">Loading messages…</p>
               ) : messages.length ? (
                 messages.map((message, index) => (
-                  <MessageBubble
-                    key={message._id}
-                    message={{ ...message, currentUserId: user.id }}
-                    previousMessage={messages[index - 1]}
-                    own={isOwnMessage(message, user.id)}
-                    onReply={(selectedMessage) =>
-                      setReplyTo({
-                        ...selectedMessage,
-                        id: selectedMessage._id,
-                        senderName: isOwnMessage(selectedMessage, user.id)
-                          ? 'yourself'
-                          : activeConversation.participant.name,
-                      })
-                    }
-                    onCopy={(text) => {
-                      if (!navigator.clipboard?.writeText) {
-                        setError('Clipboard access is not available in this browser.');
-                      } else {
-                        void navigator.clipboard.writeText(text).catch((copyError) => {
-                          setError(copyError.message || 'Could not copy message text');
-                        });
+                  <div key={message._id} id={`message-${message._id}`}>
+                    <MessageBubble
+                      message={{
+                        ...message,
+                        currentUserId: user.id,
+                        isPinned: pinnedMessages.some((pin) => pin._id === message._id),
+                        isStarred: starredIds.has(message._id),
+                      }}
+                      previousMessage={messages[index - 1]}
+                      own={isOwnMessage(message, user.id)}
+                      group={activeConversation.type === 'group'}
+                      onReply={(selectedMessage) =>
+                        setReplyTo({
+                          ...selectedMessage,
+                          id: selectedMessage._id,
+                          senderName: isOwnMessage(selectedMessage, user.id)
+                            ? 'yourself'
+                            : activeConversation.participant.name,
+                        })
                       }
-                    }}
-                    onDelete={handleDelete}
-                    onRetry={(message) => {
-                      const retry = retryActionsRef.current.get(message.clientMessageId);
-                      if (retry) void retry();
-                    }}
-                  />
+                      onCopy={(text) => {
+                        if (!navigator.clipboard?.writeText) {
+                          setError('Clipboard access is not available in this browser.');
+                        } else {
+                          void navigator.clipboard.writeText(text).catch((copyError) => {
+                            setError(copyError.message || 'Could not copy message text');
+                          });
+                        }
+                      }}
+                      onDelete={handleDelete}
+                      onEdit={handleEdit}
+                      onForward={setForwardingMessage}
+                      onPin={handlePin}
+                      onReact={handleReaction}
+                      onReport={handleReport}
+                      onStar={handleStar}
+                      onRetry={(retryMessage) => {
+                        const retry = retryActionsRef.current.get(retryMessage.clientMessageId);
+                        if (retry) void retry();
+                      }}
+                    />
+                  </div>
                 ))
               ) : (
                 <div className="flex h-full flex-col items-center justify-center text-center">
@@ -1054,6 +1475,8 @@ function ChatPage() {
               disabled={!activeConversation.canSend}
               onSendText={(text) => void sendText(text)}
               onSendFile={(file, caption) => void sendFile(file, caption)}
+              onTypingStart={startTyping}
+              onTypingStop={stopTyping}
               replyTo={replyTo}
               onCancelReply={() => setReplyTo(null)}
             />
@@ -1071,6 +1494,61 @@ function ChatPage() {
           </div>
         )}
       </div>
+      {createGroupOpen && (
+        <CreateGroupDialog
+          friends={friends}
+          onClose={() => setCreateGroupOpen(false)}
+          onCreated={async (conversation, avatarError) => {
+            setCreateGroupOpen(false);
+            await refreshLists();
+            selectConversation(conversation.id);
+            if (avatarError) setError(avatarError);
+          }}
+        />
+      )}
+      {groupInfoOpen && activeConversation?.type === 'group' && (
+        <GroupInfoDialog
+          key={activeConversation.updatedAt}
+          conversation={activeConversation}
+          friends={friends}
+          currentUserId={user.id}
+          onClose={() => setGroupInfoOpen(false)}
+          onUpdated={refreshLists}
+          onLeft={handleLeftGroup}
+        />
+      )}
+      {forwardingMessage && (
+        <div className="fixed inset-0 z-[110] grid place-items-center bg-slate-950/60 p-4">
+          <section className="w-full max-w-md rounded-2xl border border-border bg-bg p-5 shadow-xl">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold text-heading">Forward message</h2>
+              <button
+                type="button"
+                aria-label="Close forward dialog"
+                onClick={() => setForwardingMessage(null)}
+                className="rounded-lg p-2 text-text-muted hover:bg-surface"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="mt-4 max-h-72 space-y-1 overflow-y-auto">
+              {conversations.map((conversation) => (
+                <button
+                  type="button"
+                  key={conversation.id}
+                  onClick={() => void handleForward(conversation.id)}
+                  className="block w-full rounded-xl px-3 py-3 text-left text-sm text-text hover:bg-bg-subtle"
+                >
+                  {conversation.participant.name}
+                </button>
+              ))}
+              {!conversations.length && (
+                <p className="py-4 text-sm text-text-muted">No conversations available.</p>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
     </section>
   );
 }

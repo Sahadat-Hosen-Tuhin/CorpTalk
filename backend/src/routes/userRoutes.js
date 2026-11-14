@@ -5,7 +5,7 @@ const { uploadAvatar, validateAvatarSignature } = require('../middlewares/avatar
 const validate = require('../middlewares/validate');
 const authController = require('../controllers/authController');
 const chatController = require('../controllers/chatController');
-const { profileSchema } = require('../validators/authSchemas');
+const { preferencesSchema, profileSchema } = require('../validators/authSchemas');
 const { pushTokenSchema } = require('../validators/chatSchemas');
 const friendsController = require('../controllers/friendsController');
 
@@ -20,6 +20,12 @@ const userSearchLimiter = rateLimit({
 router.get('/search', authenticate, userSearchLimiter, friendsController.searchUsers);
 router.get('/me', authenticate, authController.getProfile);
 router.patch('/me', authenticate, validate(profileSchema), authController.updateProfile);
+router.patch(
+  '/me/preferences',
+  authenticate,
+  validate(preferencesSchema),
+  authController.updatePreferences,
+);
 router.post(
   '/me/avatar',
   authenticate,

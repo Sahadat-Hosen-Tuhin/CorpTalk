@@ -4,6 +4,7 @@ const { sendMessagePush } = require('../services/pushService');
 
 const emitToParticipants = (io, conversation, event, payload) => {
   let target = io.to(`conversation:${conversation._id}`);
+  if (conversation.type === 'group') target = target.to(`group:${conversation._id}`);
   for (const participant of conversation.participants) {
     target = target.to(`user:${participant.userId}`);
   }
@@ -36,6 +37,21 @@ const checkMessageRate = (socket) => {
 
 const attachChatSocket = (io, socket) => {
   const userId = socket.data.user._id;
+  const typingTimers = new Map();
+  const userName = socket.data.user.name;
+  const emitTyping = (conversation, event) => {
+    emitToParticipants(io, conversation, event, {
+      conversationId: conversation._id.toString(),
+      userId: userId.toString(),
+      name: userName,
+    });
+  };
+  const stopTyping = (conversation) => {
+    const timer = typingTimers.get(conversation._id.toString());
+    if (timer) clearTimeout(timer);
+    typingTimers.delete(conversation._id.toString());
+    emitTyping(conversation, 'typing:stop');
+  };
 
   socket.on('chat:leave', (payload, acknowledge) => {
     const parsed = objectId.safeParse(payload?.conversationId);
@@ -51,6 +67,7 @@ const attachChatSocket = (io, socket) => {
       return;
     }
     socket.leave(`conversation:${parsed.data}`);
+    socket.leave(`group:${parsed.data}`);
     if (typeof acknowledge === 'function') acknowledge({ data: { left: true } });
   });
 
@@ -65,6 +82,7 @@ const attachChatSocket = (io, socket) => {
       }
       const { conversation } = await chatService.getConversationForUser(parsed.data, userId);
       socket.join(`conversation:${conversation._id}`);
+      if (conversation.type === 'group') socket.join(`group:${conversation._id}`);
       const delivery = await chatService.markDelivered(userId, conversation._id);
       if (delivery.count) {
         emitToParticipants(io, conversation, 'message:delivered', {
@@ -112,12 +130,16 @@ const attachChatSocket = (io, socket) => {
           id: conversation._id.toString(),
           lastMessage: result.message,
         });
-        const recipientId = conversation.participants
-          .map((participant) => participant.userId.toString())
-          .find((participantId) => participantId !== userId.toString());
-        if (recipientId) {
+        const recipients = conversation.participants.filter((participant) => {
+          const participantId = participant.userId.toString();
+          return (
+            participantId !== userId.toString() &&
+            (conversation.type !== 'group' || !participant.notificationsMuted)
+          );
+        });
+        for (const participant of recipients) {
           void sendMessagePush({
-            recipientId,
+            recipientId: participant.userId,
             conversationId: conversation._id,
             message: result.message,
           }).catch((error) => console.error('Could not send message push notification', error));
@@ -153,6 +175,54 @@ const attachChatSocket = (io, socket) => {
       if (typeof acknowledge === 'function') acknowledge({ data: result });
     } catch (error) {
       reportSocketError(socket, acknowledge, error);
+    }
+  });
+
+  socket.on('typing:start', async (payload, acknowledge) => {
+    try {
+      const parsed = objectId.safeParse(payload?.conversationId);
+      if (!parsed.success) {
+        throw Object.assign(new Error('A valid conversation ID is required'), {
+          statusCode: 400,
+          code: 'INVALID_CONVERSATION_ID',
+        });
+      }
+      const { conversation } = await chatService.getConversationForUser(parsed.data, userId);
+      await chatService.authorizeDirectMessage(userId, conversation._id);
+      const key = conversation._id.toString();
+      const timer = typingTimers.get(key);
+      if (timer) clearTimeout(timer);
+      emitTyping(conversation, 'typing:start');
+      const stopTimer = setTimeout(() => stopTyping(conversation), 4000);
+      stopTimer.unref?.();
+      typingTimers.set(key, stopTimer);
+      if (typeof acknowledge === 'function') acknowledge({ data: { typing: true } });
+    } catch (error) {
+      reportSocketError(socket, acknowledge, error);
+    }
+  });
+
+  socket.on('typing:stop', async (payload, acknowledge) => {
+    try {
+      const parsed = objectId.safeParse(payload?.conversationId);
+      if (!parsed.success) {
+        throw Object.assign(new Error('A valid conversation ID is required'), {
+          statusCode: 400,
+          code: 'INVALID_CONVERSATION_ID',
+        });
+      }
+      const { conversation } = await chatService.getConversationForUser(parsed.data, userId);
+      stopTyping(conversation);
+      if (typeof acknowledge === 'function') acknowledge({ data: { typing: false } });
+    } catch (error) {
+      reportSocketError(socket, acknowledge, error);
+    }
+  });
+
+  socket.on('disconnect', () => {
+    for (const conversationId of typingTimers.keys()) {
+      const roomConversation = { _id: conversationId, type: 'group', participants: [] };
+      stopTyping(roomConversation);
     }
   });
 };

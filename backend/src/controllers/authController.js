@@ -2,6 +2,7 @@ const authService = require('../services/authService');
 const toPublicUser = require('../services/userDto');
 const { uploadAvatar: uploadAvatarToStorage } = require('../services/avatarService');
 const AppError = require('../utils/AppError');
+const Friendship = require('../models/friendship');
 
 const refreshCookieName = () => process.env.REFRESH_COOKIE_NAME || 'refreshToken';
 const cookieOptions = () => {
@@ -90,6 +91,42 @@ const updateProfile = async (req, res) => {
   res.status(200).json({ data: { user } });
 };
 
+const updatePreferences = async (req, res) => {
+  const user = await authService.updatePreferences(req.user._id, req.validatedBody);
+  const io = req.app.get('io');
+  if (io) {
+    const sockets = await io.in(`user:${req.user._id}`).fetchSockets();
+    sockets.forEach((socket) => {
+      if (socket.data.user) socket.data.user.privacy = user.privacy;
+    });
+    if (req.validatedBody.privacy?.showOnlineStatus !== undefined) {
+      const friendships = await Friendship.find({
+        status: 'accepted',
+        $or: [{ requester: req.user._id }, { recipient: req.user._id }],
+      }).select('requester recipient');
+      const lastSeen =
+        user.privacy.lastSeenVisibility === 'nobody' || !user.privacy.showOnlineStatus
+          ? null
+          : user.isOnline
+            ? null
+            : user.lastSeen;
+      const payload = {
+        userId: req.user._id.toString(),
+        online: user.privacy.showOnlineStatus && user.isOnline,
+        lastSeen,
+      };
+      for (const friendship of friendships) {
+        const friendId =
+          friendship.requester.toString() === req.user._id.toString()
+            ? friendship.recipient
+            : friendship.requester;
+        io.to(`user:${friendId}`).emit('presence:update', payload);
+      }
+    }
+  }
+  res.status(200).json({ data: { user } });
+};
+
 const uploadAvatar = async (req, res) => {
   const user = await uploadAvatarToStorage(req.user._id, req.file);
   res.status(200).json({ data: { user } });
@@ -116,6 +153,7 @@ module.exports = {
   resetPassword,
   signup,
   updateProfile,
+  updatePreferences,
   uploadAvatar,
   verifyEmail,
 };

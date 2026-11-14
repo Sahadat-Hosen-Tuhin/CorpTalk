@@ -54,10 +54,41 @@ const profileSchema = z
   .refine((value) => Object.keys(value).length > 0, {
     message: 'Provide at least one profile field to update',
   });
+const preferencesSchema = z
+  .object({
+    privacy: z
+      .object({
+        profileVisibility: z.enum(['everyone', 'friends']).optional(),
+        lastSeenVisibility: z.enum(['everyone', 'friends', 'nobody']).optional(),
+        readReceipts: z.boolean().optional(),
+        showOnlineStatus: z.boolean().optional(),
+        allowFriendRequests: z.boolean().optional(),
+        callPermission: z.enum(['everyone', 'friends', 'nobody']).optional(),
+      })
+      .strict()
+      .optional(),
+    settings: z
+      .object({
+        theme: z.enum(['light', 'dark', 'system']).optional(),
+        notificationsEnabled: z.boolean().optional(),
+        timezone: z.string().trim().min(1).max(64).optional(),
+        language: z.string().trim().min(2).max(16).optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      (value.privacy && Object.keys(value.privacy).length > 0) ||
+      (value.settings && Object.keys(value.settings).length > 0),
+    'Provide at least one preference to update',
+  );
 
 module.exports = {
   emailSchema,
   loginSchema,
+  preferencesSchema,
   profileSchema,
   resetPasswordSchema,
   signupSchema,

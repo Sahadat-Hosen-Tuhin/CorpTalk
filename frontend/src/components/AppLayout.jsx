@@ -4,7 +4,9 @@ import { getAuthErrorMessage, useAuthStore } from '../stores/authStore.js';
 import { createChatSocket } from '../services/chatSocket.js';
 import { getAccessToken } from '../services/apiClient.js';
 import { getFriendRequests } from '../services/chatApi.js';
+import { decideMeetingJoinRequest } from '../services/meetingApi.js';
 import FormAlert from './FormAlert.jsx';
+import CallManager from './CallManager.jsx';
 
 const linkClass = ({ isActive }) =>
   `rounded-full px-2 py-2 text-xs font-medium transition-colors sm:px-4 sm:text-sm ${
@@ -20,6 +22,23 @@ function AppLayout() {
   const [logoutError, setLogoutError] = useState('');
   const [friendRequestCount, setFriendRequestCount] = useState(0);
   const [friendNotice, setFriendNotice] = useState('');
+  const [meetingRequests, setMeetingRequests] = useState([]);
+  const [meetingRequestError, setMeetingRequestError] = useState('');
+  const [realtimeSocket, setRealtimeSocket] = useState(null);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const theme = user?.settings?.theme || 'system';
+    const applyTheme = (systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches) => {
+      root.classList.toggle('dark', theme === 'dark' || (theme === 'system' && systemDark));
+      root.classList.toggle('light', theme === 'light');
+    };
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleThemeChange = (event) => applyTheme(event.matches);
+    applyTheme();
+    mediaQuery.addEventListener('change', handleThemeChange);
+    return () => mediaQuery.removeEventListener('change', handleThemeChange);
+  }, [user?.settings?.theme]);
 
   useEffect(() => {
     if (!user?.id) return undefined;
@@ -34,30 +53,79 @@ function AppLayout() {
         });
     };
     const socket = createChatSocket();
+    const handleSocketConnect = () => setRealtimeSocket(socket);
+    socket.on('connect', handleSocketConnect);
     const handleFriendRequest = (request) => {
       setFriendNotice(`${request.user.name} sent you a friend request.`);
       refreshRequestCount();
     };
+    const handleMeetingJoinRequest = (payload) => {
+      setMeetingRequests((current) => {
+        const remaining = current.filter((entry) => entry.request.id !== payload.request.id);
+        return [...remaining, payload];
+      });
+    };
+    const handleMeetingInvite = (meeting) => {
+      setFriendNotice(`You were invited to “${meeting.title}”.`);
+    };
+    const handleMeetingClosed = ({ meetingId }) => {
+      setMeetingRequests((current) => current.filter((entry) => entry.meetingId !== meetingId));
+    };
+    const handleMeetingUpdated = (meeting) => {
+      if (!meeting.allowLinkRequests) {
+        setMeetingRequests((current) => current.filter((entry) => entry.meetingId !== meeting.id));
+      }
+    };
     const refreshSocketAuth = (event) => {
-      socket.auth = { token: event?.detail?.accessToken ? event.detail.accessToken : getAccessToken() };
+      socket.auth = {
+        token: event?.detail?.accessToken ? event.detail.accessToken : getAccessToken(),
+      };
       socket.disconnect();
       socket.connect();
     };
     socket.on('friend:request', handleFriendRequest);
     socket.on('friend:accepted', refreshRequestCount);
     socket.on('friend:removed', refreshRequestCount);
+    socket.on('meeting:join-request', handleMeetingJoinRequest);
+    socket.on('meeting:invited', handleMeetingInvite);
+    socket.on('meeting:cancelled', handleMeetingClosed);
+    socket.on('meeting:request-decision', handleMeetingClosed);
+    socket.on('meeting:updated', handleMeetingUpdated);
     window.addEventListener('corptalk:auth-refreshed', refreshSocketAuth);
     refreshRequestCount();
 
     return () => {
       active = false;
+      setRealtimeSocket(null);
       window.removeEventListener('corptalk:auth-refreshed', refreshSocketAuth);
+      socket.off('connect', handleSocketConnect);
       socket.off('friend:request', handleFriendRequest);
       socket.off('friend:accepted', refreshRequestCount);
       socket.off('friend:removed', refreshRequestCount);
+      socket.off('meeting:join-request', handleMeetingJoinRequest);
+      socket.off('meeting:invited', handleMeetingInvite);
+      socket.off('meeting:cancelled', handleMeetingClosed);
+      socket.off('meeting:request-decision', handleMeetingClosed);
+      socket.off('meeting:updated', handleMeetingUpdated);
       socket.disconnect();
     };
   }, [user?.id]);
+
+  const handleMeetingDecision = async (request, decision) => {
+    setMeetingRequestError('');
+    try {
+      await decideMeetingJoinRequest(request.meetingId, request.request.id, decision);
+      setMeetingRequests((current) =>
+        current.filter((entry) => entry.request.id !== request.request.id),
+      );
+    } catch (decisionError) {
+      setMeetingRequestError(
+        decisionError.response?.data?.error?.message ||
+          decisionError.message ||
+          'Could not decide request.',
+      );
+    }
+  };
 
   const handleLogout = async () => {
     setLogoutError('');
@@ -104,6 +172,18 @@ function AppLayout() {
                 </span>
               )}
             </NavLink>
+            <NavLink to="/calls" className={linkClass}>
+              Calls
+            </NavLink>
+            <NavLink to="/meetings" className={linkClass}>
+              Meetings
+            </NavLink>
+            <NavLink to="/stories" className={linkClass}>
+              Stories
+            </NavLink>
+            <NavLink to="/starred" className={linkClass}>
+              Starred
+            </NavLink>
             <NavLink to="/profile" className={linkClass}>
               Profile
             </NavLink>
@@ -135,7 +215,50 @@ function AppLayout() {
             </button>
           </div>
         )}
+        {meetingRequests.length > 0 && (
+          <section className="mt-3 space-y-2" aria-label="Meeting join requests">
+            {meetingRequestError && (
+              <p role="alert" className="rounded-xl bg-error/10 px-4 py-2 text-sm text-error">
+                {meetingRequestError}
+              </p>
+            )}
+            {meetingRequests.map((entry) => (
+              <div
+                key={entry.request.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-brand-primary-soft px-4 py-3 text-sm text-brand-primary-text"
+              >
+                <span>
+                  <strong>{entry.request.user.name}</strong> requested to join{' '}
+                  <strong>{entry.title}</strong>.
+                </span>
+                <div className="flex gap-2">
+                  <NavLink
+                    to={`/meet/${entry.meetingLink || ''}`}
+                    className="rounded-lg px-2 py-1 font-medium underline"
+                  >
+                    Open meeting
+                  </NavLink>
+                  <button
+                    type="button"
+                    onClick={() => void handleMeetingDecision(entry, 'accepted')}
+                    className="rounded-lg bg-success px-3 py-1 font-semibold text-white"
+                  >
+                    Accept
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleMeetingDecision(entry, 'rejected')}
+                    className="rounded-lg bg-error px-3 py-1 font-semibold text-white"
+                  >
+                    Reject
+                  </button>
+                </div>
+              </div>
+            ))}
+          </section>
+        )}
         <FormAlert>{logoutError}</FormAlert>
+        <CallManager socket={realtimeSocket} user={user} />
         <main className="flex-1 py-10 sm:py-14">
           <Outlet />
         </main>

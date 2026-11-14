@@ -84,6 +84,12 @@ export const useAuthStore = create((set) => ({
     return response.data.data.user;
   },
 
+  async updatePreferences(values) {
+    const response = await apiClient.patch('/users/me/preferences', values);
+    set({ user: response.data.data.user });
+    return response.data.data.user;
+  },
+
   async uploadAvatar(file) {
     const formData = new FormData();
     formData.append('avatar', file);

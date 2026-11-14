@@ -27,6 +27,10 @@ const participantSchema = new Schema(
       min: 0,
       default: 0,
     },
+    notificationsMuted: {
+      type: Boolean,
+      default: false,
+    },
   },
   { _id: false },
 );
@@ -72,14 +76,14 @@ const conversationSchema = new Schema(
       required: true,
       validate: {
         validator(participants) {
-          if (participants.length < 2 || (this.type === 'direct' && participants.length !== 2)) {
+          if (participants.length < 1 || (this.type === 'direct' && participants.length !== 2)) {
             return false;
           }
           const ids = participants.map(({ userId }) => userId.toString());
           return new Set(ids).size === ids.length;
         },
         message:
-          'A direct conversation requires two unique participants; groups require at least two',
+          'A direct conversation requires two unique participants; groups require at least one',
       },
     },
     directKey: {
@@ -104,11 +108,24 @@ const conversationSchema = new Schema(
       maxlength: 100,
       default: '',
     },
+    description: {
+      type: String,
+      trim: true,
+      maxlength: 500,
+      default: '',
+    },
     avatar: {
       type: String,
       trim: true,
       maxlength: 2048,
       default: null,
+    },
+    avatarPublicId: {
+      type: String,
+      trim: true,
+      maxlength: 512,
+      default: null,
+      select: false,
     },
     permissions: {
       adminsOnlyMessages: { type: Boolean, default: false },

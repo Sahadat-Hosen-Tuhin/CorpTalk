@@ -101,6 +101,11 @@ const userSchema = new Schema(
         type: Boolean,
         default: true,
       },
+      callPermission: {
+        type: String,
+        enum: ['everyone', 'friends', 'nobody'],
+        default: 'friends',
+      },
     },
     settings: {
       theme: {

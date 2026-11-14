@@ -23,6 +23,13 @@ const storySchema = new Schema(
       trim: true,
       maxlength: 2048,
     },
+    mediaPublicId: {
+      type: String,
+      trim: true,
+      maxlength: 512,
+      default: null,
+      select: false,
+    },
     mediaType: {
       type: String,
       enum: ['image', 'video'],

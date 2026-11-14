@@ -159,6 +159,17 @@ const updateProfile = async (userId, updates) => {
   return toPublicUser(user);
 };
 
+const updatePreferences = async (userId, updates) => {
+  const user = await User.findById(userId);
+  if (!user) {
+    throw new AppError(404, 'USER_NOT_FOUND', 'User not found');
+  }
+  if (updates.privacy) Object.assign(user.privacy, updates.privacy);
+  if (updates.settings) Object.assign(user.settings, updates.settings);
+  await user.save();
+  return toPublicUser(user);
+};
+
 const setAvatar = async (userId, avatar, avatarPublicId) => {
   const user = await User.findById(userId).select('+avatarPublicId');
   if (!user) {
@@ -199,5 +210,6 @@ module.exports = {
   signup,
   updatePushToken,
   updateProfile,
+  updatePreferences,
   verifyEmail,
 };

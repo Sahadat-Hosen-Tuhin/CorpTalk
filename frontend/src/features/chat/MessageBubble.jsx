@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { Check, CheckCheck, Clock3, Copy, Reply, Trash2 } from 'lucide-react';
+import { Flag, Forward, Pencil, Pin, Smile, Star } from 'lucide-react';
 import { format, isSameDay } from 'date-fns';
 
 const getStatusIcon = (status) => {
@@ -8,10 +10,27 @@ const getStatusIcon = (status) => {
   return <Clock3 size={14} />;
 };
 
-function MessageBubble({ message, previousMessage, own, onCopy, onDelete, onReply, onRetry }) {
+function MessageBubble({
+  message,
+  previousMessage,
+  own,
+  group = false,
+  onCopy,
+  onDelete,
+  onEdit,
+  onForward,
+  onPin,
+  onReact,
+  onReport,
+  onReply,
+  onRetry,
+  onStar,
+}) {
+  const [reactionsOpen, setReactionsOpen] = useState(false);
   const sentAt = new Date(message.createdAt);
   const showDate = !previousMessage || !isSameDay(sentAt, new Date(previousMessage.createdAt));
   const deletedForMe = message.deletedFor?.some((id) => id.toString() === message.currentUserId);
+  const seenByCount = message.receipts?.filter((receipt) => receipt.readAt).length || 0;
 
   return (
     <div>
@@ -23,7 +42,16 @@ function MessageBubble({ message, previousMessage, own, onCopy, onDelete, onRepl
       {message.type === 'system' ? (
         <p className="my-3 text-center text-xs text-text-muted">{message.text}</p>
       ) : (
-        <div className={`group flex ${own ? 'justify-end' : 'justify-start'}`}>
+        <div className={`group flex items-end gap-2 ${own ? 'justify-end' : 'justify-start'}`}>
+          {group && !own && (
+            <span className="mb-1 grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded-full bg-brand-primary-soft text-[10px] font-semibold text-brand-primary-text">
+              {message.sender?.avatar ? (
+                <img src={message.sender.avatar} alt="" className="h-full w-full object-cover" />
+              ) : (
+                message.sender?.name?.slice(0, 1).toUpperCase() || '?'
+              )}
+            </span>
+          )}
           <article
             className={`max-w-[85%] rounded-2xl px-4 py-3 shadow-sm sm:max-w-[75%] ${
               own
@@ -31,6 +59,11 @@ function MessageBubble({ message, previousMessage, own, onCopy, onDelete, onRepl
                 : 'rounded-bl-md border border-border bg-bg text-text'
             }`}
           >
+            {group && !own && (
+              <p className="mb-1 text-[11px] font-semibold text-brand-primary-text">
+                {message.sender?.name || 'Group member'}
+              </p>
+            )}
             {message.replyTo && (
               <div className="mb-2 border-l-2 border-brand-primary pl-2 text-xs text-text-muted">
                 <span className="font-semibold">{message.replyTo.senderName}</span>
@@ -82,6 +115,30 @@ function MessageBubble({ message, previousMessage, own, onCopy, onDelete, onRepl
                 )}
               </>
             )}
+            {message.reactions?.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1">
+                {[...new Set(message.reactions.map((reaction) => reaction.emoji))].map((emoji) => {
+                  const matching = message.reactions.filter((reaction) => reaction.emoji === emoji);
+                  return (
+                    <button
+                      type="button"
+                      key={emoji}
+                      onClick={() => onReact(message, emoji)}
+                      aria-label={`React ${emoji}, ${matching.length} reactions`}
+                      className={`rounded-full border px-2 py-0.5 text-xs ${
+                        matching.some(
+                          (reaction) => reaction.userId?.toString() === message.currentUserId,
+                        )
+                          ? 'border-brand-primary bg-brand-primary-soft'
+                          : 'border-border bg-bg'
+                      }`}
+                    >
+                      {emoji} {matching.length}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
             <div className="mt-2 flex items-center justify-end gap-1.5 text-[11px] text-text-muted">
               {message.failed ? (
                 <button
@@ -94,7 +151,14 @@ function MessageBubble({ message, previousMessage, own, onCopy, onDelete, onRepl
               ) : (
                 <>
                   <span>{format(sentAt, 'p')}</span>
-                  {own && getStatusIcon(message.status)}
+                  {message.editedAt && <span>Edited</span>}
+                  {message.forwarded && <span>Forwarded</span>}
+                  {own &&
+                    (group ? (
+                      <span>{seenByCount > 0 ? `Seen by ${seenByCount}` : 'Sent'}</span>
+                    ) : (
+                      getStatusIcon(message.status)
+                    ))}
                 </>
               )}
             </div>
@@ -118,6 +182,61 @@ function MessageBubble({ message, previousMessage, own, onCopy, onDelete, onRepl
                 >
                   <Reply size={14} />
                 </button>
+                {own && message.type === 'text' && (
+                  <button
+                    type="button"
+                    aria-label="Edit message"
+                    className="text-text-muted hover:text-heading"
+                    onClick={() => onEdit(message)}
+                  >
+                    <Pencil size={14} />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  aria-label="React to message"
+                  className="text-text-muted hover:text-heading"
+                  onClick={() => setReactionsOpen((current) => !current)}
+                >
+                  <Smile size={14} />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Forward message"
+                  className="text-text-muted hover:text-heading"
+                  onClick={() => onForward(message)}
+                >
+                  <Forward size={14} />
+                </button>
+                <button
+                  type="button"
+                  aria-label={message.isPinned ? 'Unpin message' : 'Pin message'}
+                  className="text-text-muted hover:text-heading"
+                  onClick={() => onPin(message)}
+                >
+                  <Pin size={14} className={message.isPinned ? 'text-brand-primary-text' : ''} />
+                </button>
+                <button
+                  type="button"
+                  aria-label={message.isStarred ? 'Unstar message' : 'Star message'}
+                  className="text-text-muted hover:text-heading"
+                  onClick={() => onStar(message)}
+                >
+                  <Star
+                    size={14}
+                    className={message.isStarred ? 'fill-warning text-warning' : ''}
+                  />
+                </button>
+                {!own && (
+                  <button
+                    type="button"
+                    aria-label="Report message"
+                    className="text-text-muted hover:text-error"
+                    onClick={() => onReport(message)}
+                  >
+                    <Flag size={14} />
+                  </button>
+                )}
                 <button
                   type="button"
                   aria-label={own ? 'Delete for me or everyone' : 'Delete for me'}
@@ -126,6 +245,24 @@ function MessageBubble({ message, previousMessage, own, onCopy, onDelete, onRepl
                 >
                   <Trash2 size={14} />
                 </button>
+              </div>
+            )}
+            {reactionsOpen && (
+              <div className="mt-2 flex flex-wrap justify-end gap-1">
+                {['👍', '❤️', '😂', '😮', '😢', '🙏', '🎉', '👏'].map((emoji) => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    aria-label={`React ${emoji}`}
+                    onClick={() => {
+                      setReactionsOpen(false);
+                      onReact(message, emoji);
+                    }}
+                    className="rounded-lg p-1.5 hover:bg-surface"
+                  >
+                    {emoji}
+                  </button>
+                ))}
               </div>
             )}
           </article>

@@ -7,6 +7,8 @@ const User = require('../models/user');
 const AppError = require('../utils/AppError');
 
 const PAGE_SIZE = 30;
+const SEARCH_PAGE_SIZE = 20;
+const MAX_PINNED_MESSAGES = 20;
 
 const messageError = () =>
   new AppError(404, 'MESSAGE_NOT_FOUND', 'Message not found in this conversation');
@@ -51,23 +53,35 @@ const getConversationForUser = async (conversationId, userId) => {
   }
   const conversation = await Conversation.findOne({
     _id: conversationId,
-    type: 'direct',
     'participants.userId': userId,
   });
   if (!conversation) {
     throw conversationError();
   }
-  const otherParticipant = conversation.participants.find(
-    (participant) => participant.userId.toString() !== userId.toString(),
-  );
-  if (!otherParticipant) {
-    throw conversationError();
+  if (conversation.type === 'direct') {
+    const otherParticipant = conversation.participants.find(
+      (participant) => participant.userId.toString() !== userId.toString(),
+    );
+    if (!otherParticipant) throw conversationError();
+    await ensureNotBlocked(userId, otherParticipant.userId);
+    return { conversation, otherUserId: otherParticipant.userId };
   }
-  await ensureNotBlocked(userId, otherParticipant.userId);
-  return { conversation, otherUserId: otherParticipant.userId };
+  return { conversation, otherUserId: null };
 };
 
 const ensureCanSend = async (conversation, senderId) => {
+  if (conversation.type === 'group') {
+    const sender = conversation.participants.find(
+      (participant) => participant.userId.toString() === senderId.toString(),
+    );
+    if (!sender) throw conversationError();
+    if (conversation.permissions.adminsOnlyMessages && !['owner', 'admin'].includes(sender.role)) {
+      throw new AppError(403, 'GROUP_MESSAGES_ADMIN_ONLY', 'Only group admins can send messages');
+    }
+    return conversation.participants
+      .filter((participant) => participant.userId.toString() !== senderId.toString())
+      .map((participant) => participant.userId);
+  }
   const recipient = conversation.participants.find(
     (participant) => participant.userId.toString() !== senderId.toString(),
   );
@@ -76,7 +90,7 @@ const ensureCanSend = async (conversation, senderId) => {
   }
   await ensureNotBlocked(senderId, recipient.userId);
   await ensureFriendship(senderId, recipient.userId);
-  return recipient.userId;
+  return [recipient.userId];
 };
 
 const authorizeDirectMessage = async (userId, conversationId) => {
@@ -89,7 +103,7 @@ const serializeMessage = (message) => {
   return {
     ...value,
     _id: value._id.toString(),
-    conversationId: value.conversationId.toString(),
+    conversationId: value.conversationId._id?.toString() || value.conversationId.toString(),
     sender:
       value.sender && typeof value.sender === 'object'
         ? {
@@ -107,6 +121,8 @@ const serializeMessage = (message) => {
             senderName: value.replyTo.sender?.name || '',
           }
         : value.replyTo?.toString() || null,
+    forwarded: Boolean(value.forwardedFrom),
+    forwardedFrom: value.forwardedFrom?.toString() || null,
   };
 };
 
@@ -121,10 +137,7 @@ const getConversationList = async (userId) => {
         : block.blocker.toString(),
     ),
   );
-  const conversations = await Conversation.find({
-    type: 'direct',
-    'participants.userId': userId,
-  })
+  const conversations = await Conversation.find({ 'participants.userId': userId })
     .sort({ updatedAt: -1 })
     .populate('participants.userId', 'name username avatar isOnline lastSeen privacy')
     .lean();
@@ -141,19 +154,51 @@ const getConversationList = async (userId) => {
   );
 
   return conversations
-    .filter(
-      (conversation) =>
-        conversation.participants.length === 2 &&
-        conversation.participants.every((participant) => participant.userId),
-    )
+    .filter((conversation) => conversation.participants.every((participant) => participant.userId))
     .map((conversation) => {
       const current = conversation.participants.find(
         (participant) => participant.userId._id.toString() === userId.toString(),
       );
+      if (!current) return null;
+      if (conversation.type === 'group') {
+        const members = conversation.participants.map((participant) => ({
+          id: participant.userId._id.toString(),
+          name: participant.userId.name,
+          avatar: participant.userId.avatar,
+          role: participant.role,
+          joinedAt: participant.joinedAt,
+          notificationsMuted: participant.notificationsMuted,
+        }));
+        return {
+          id: conversation._id.toString(),
+          type: 'group',
+          name: conversation.name,
+          description: conversation.description,
+          avatar: conversation.avatar,
+          participant: {
+            id: conversation._id.toString(),
+            name: conversation.name,
+            avatar: conversation.avatar,
+            isOnline: false,
+            lastSeen: null,
+          },
+          members,
+          currentRole: current.role,
+          permissions: conversation.permissions,
+          muted: current.notificationsMuted,
+          canSend:
+            !conversation.permissions.adminsOnlyMessages ||
+            ['owner', 'admin'].includes(current.role),
+          unreadCount: current.unreadCount,
+          lastMessage: conversation.lastMessage,
+          updatedAt: conversation.updatedAt,
+        };
+      }
+      if (conversation.participants.length !== 2) return null;
       const other = conversation.participants.find(
         (participant) => participant.userId._id.toString() !== userId.toString(),
       );
-      if (!current || !other) return null;
+      if (!other) return null;
       const user = other.userId;
       if (blockedUserIds.has(user._id.toString())) return null;
       const blocked =
@@ -257,12 +302,13 @@ const getMessageHistory = async (userId, conversationId, cursor) => {
 const saveMessage = async ({
   userId,
   conversation,
-  recipientId,
+  recipientIds,
   text,
   replyTo,
   media,
   type,
   clientMessageId,
+  forwardedFrom,
 }) => {
   if (clientMessageId) {
     const existing = await Message.findOne({
@@ -300,7 +346,8 @@ const saveMessage = async ({
       media: media || null,
       replyTo: repliedMessage?._id || null,
       clientMessageId: clientMessageId || null,
-      receipts: [{ userId: recipientId }],
+      forwardedFrom: forwardedFrom || null,
+      receipts: recipientIds.map((recipientId) => ({ userId: recipientId })),
     });
   } catch (error) {
     if (error.code !== 11000 || !clientMessageId) throw error;
@@ -340,7 +387,7 @@ const saveMessage = async ({
       },
       $inc: { 'participants.$[recipient].unreadCount': 1 },
     },
-    { arrayFilters: [{ 'recipient.userId': recipientId }] },
+    { arrayFilters: [{ 'recipient.userId': { $in: recipientIds } }] },
   );
   await message.populate([
     { path: 'sender', select: 'name avatar' },
@@ -355,11 +402,11 @@ const saveMessage = async ({
 
 const sendTextMessage = async ({ userId, conversationId, text, replyTo, clientMessageId }) => {
   const { conversation } = await getConversationForUser(conversationId, userId);
-  const recipientId = await ensureCanSend(conversation, userId);
+  const recipientIds = await ensureCanSend(conversation, userId);
   return saveMessage({
     userId,
     conversation,
-    recipientId,
+    recipientIds,
     text,
     replyTo,
     type: 'text',
@@ -377,17 +424,198 @@ const saveMediaMessage = async ({
   clientMessageId,
 }) => {
   const { conversation } = await getConversationForUser(conversationId, userId);
-  const recipientId = await ensureCanSend(conversation, userId);
+  const recipientIds = await ensureCanSend(conversation, userId);
   return saveMessage({
     userId,
     conversation,
-    recipientId,
+    recipientIds,
     text,
     replyTo,
     type,
     media,
     clientMessageId,
   });
+};
+
+const editMessage = async (userId, messageId, text) => {
+  if (!mongoose.isValidObjectId(messageId)) throw messageError();
+  const message = await Message.findOne({
+    _id: messageId,
+    deletedFor: { $ne: userId },
+    deletedForAll: false,
+  });
+  if (!message || message.deletedForAll || message.type !== 'text') throw messageError();
+  const { conversation } = await getConversationForUser(message.conversationId, userId);
+  await ensureCanSend(conversation, userId);
+  if (message.sender?.toString() !== userId.toString()) {
+    throw new AppError(403, 'MESSAGE_EDIT_FORBIDDEN', 'Only the sender can edit this message');
+  }
+  if (Date.now() - message.createdAt.getTime() > 15 * 60_000) {
+    throw new AppError(
+      409,
+      'MESSAGE_EDIT_WINDOW_EXPIRED',
+      'Messages can only be edited for 15 minutes',
+    );
+  }
+  message.text = text;
+  message.editedAt = new Date();
+  await message.save();
+  await message.populate('sender', 'name avatar');
+  const serialized = serializeMessage(message);
+  await Conversation.updateOne(
+    { _id: conversation._id, 'lastMessage.messageId': message._id },
+    { $set: { 'lastMessage.preview': text.slice(0, 200) } },
+  );
+  return { message: serialized, conversationId: conversation._id.toString() };
+};
+
+const forwardMessage = async (userId, messageId, targetConversationId) => {
+  if (!mongoose.isValidObjectId(messageId)) throw messageError();
+  const source = await Message.findById(messageId);
+  if (!source || source.deletedForAll || source.type === 'system') throw messageError();
+  await getConversationForUser(source.conversationId, userId);
+  if (source.deletedFor.some((id) => id.toString() === userId.toString())) throw messageError();
+  const { conversation: target } = await getConversationForUser(targetConversationId, userId);
+  const recipientIds = await ensureCanSend(target, userId);
+  const result = await saveMessage({
+    userId,
+    conversation: target,
+    recipientIds,
+    text: source.text,
+    media: source.media,
+    type: source.type,
+    forwardedFrom: source.forwardedFrom || source._id,
+  });
+  return { ...result, conversationId: target._id.toString() };
+};
+
+const toggleMessageReaction = async (userId, messageId, emoji) => {
+  if (!mongoose.isValidObjectId(messageId)) throw messageError();
+  const message = await Message.findOne({
+    _id: messageId,
+    deletedFor: { $ne: userId },
+    deletedForAll: false,
+  });
+  if (!message) throw messageError();
+  const { conversation } = await getConversationForUser(message.conversationId, userId);
+  const previous = message.reactions.find(
+    (reaction) => reaction.userId.toString() === userId.toString(),
+  );
+  const removed = previous?.emoji === emoji;
+  if (previous) message.reactions = message.reactions.filter((reaction) => reaction !== previous);
+  if (!removed) message.reactions.push({ userId, emoji });
+  await message.save();
+  await message.populate('sender', 'name avatar');
+  return {
+    message: serializeMessage(message),
+    conversationId: conversation._id.toString(),
+  };
+};
+
+const toggleStarMessage = async (userId, messageId) => {
+  if (!mongoose.isValidObjectId(messageId)) throw messageError();
+  const message = await Message.findOne({
+    _id: messageId,
+    deletedFor: { $ne: userId },
+    deletedForAll: false,
+  });
+  if (!message) throw messageError();
+  await getConversationForUser(message.conversationId, userId);
+  const starred = message.starredBy.some((id) => id.toString() === userId.toString());
+  await Message.updateOne(
+    { _id: message._id },
+    starred ? { $pull: { starredBy: userId } } : { $addToSet: { starredBy: userId } },
+  );
+  return { starred: !starred };
+};
+
+const getStarredMessages = async (userId) => {
+  const messages = await Message.find({
+    starredBy: userId,
+    deletedFor: { $ne: userId },
+    deletedForAll: false,
+  })
+    .sort({ updatedAt: -1, _id: -1 })
+    .limit(100)
+    .populate('sender', 'name avatar');
+  const visible = [];
+  for (const message of messages) {
+    try {
+      await getConversationForUser(message.conversationId, userId);
+      visible.push(serializeMessage(message));
+    } catch (error) {
+      if (error.statusCode !== 404 && error.code !== 'CHAT_BLOCKED') throw error;
+    }
+  }
+  return visible;
+};
+
+const searchMessages = async (userId, conversationId, query) => {
+  const { conversation } = await getConversationForUser(conversationId, userId);
+  const messages = await Message.find({
+    conversationId: conversation._id,
+    $text: { $search: query },
+    deletedFor: { $ne: userId },
+    deletedForAll: false,
+  })
+    .select({ score: { $meta: 'textScore' } })
+    .sort({ score: { $meta: 'textScore' }, createdAt: -1 })
+    .limit(SEARCH_PAGE_SIZE)
+    .populate('sender', 'name avatar');
+  return messages.map(serializeMessage);
+};
+
+const pinMessage = async (userId, conversationId, messageId) => {
+  if (!mongoose.isValidObjectId(messageId)) throw messageError();
+  const { conversation } = await getConversationForUser(conversationId, userId);
+  const message = await Message.findOne({
+    _id: messageId,
+    conversationId: conversation._id,
+    deletedFor: { $ne: userId },
+    deletedForAll: false,
+  });
+  if (!message) throw messageError();
+  if (conversation.pinnedMessages.some((pin) => pin.messageId.toString() === messageId)) {
+    return getPinnedMessages(userId, conversationId);
+  }
+  if (conversation.pinnedMessages.length >= MAX_PINNED_MESSAGES) {
+    throw new AppError(
+      409,
+      'PIN_LIMIT_REACHED',
+      'A conversation can have at most 20 pinned messages',
+    );
+  }
+  conversation.pinnedMessages.push({ messageId, pinnedBy: userId });
+  await conversation.save();
+  return getPinnedMessages(userId, conversationId);
+};
+
+const unpinMessage = async (userId, conversationId, messageId) => {
+  if (!mongoose.isValidObjectId(messageId)) throw messageError();
+  const { conversation } = await getConversationForUser(conversationId, userId);
+  const originalCount = conversation.pinnedMessages.length;
+  conversation.pinnedMessages = conversation.pinnedMessages.filter(
+    (pin) => pin.messageId.toString() !== messageId,
+  );
+  if (conversation.pinnedMessages.length === originalCount) {
+    throw new AppError(404, 'PIN_NOT_FOUND', 'Pinned message not found');
+  }
+  await conversation.save();
+  return getPinnedMessages(userId, conversationId);
+};
+
+const getPinnedMessages = async (userId, conversationId) => {
+  const { conversation } = await getConversationForUser(conversationId, userId);
+  const messageIds = conversation.pinnedMessages.map((pin) => pin.messageId);
+  const messages = await Message.find({
+    _id: { $in: messageIds },
+    conversationId: conversation._id,
+    deletedFor: { $ne: userId },
+    deletedForAll: false,
+  })
+    .populate('sender', 'name avatar')
+    .sort({ createdAt: -1 });
+  return messages.map(serializeMessage);
 };
 
 const markDelivered = async (userId, conversationId) => {
@@ -397,8 +625,7 @@ const markDelivered = async (userId, conversationId) => {
     {
       conversationId: conversation._id,
       sender: { $ne: userId },
-      'receipts.userId': userId,
-      'receipts.deliveredAt': null,
+      receipts: { $elemMatch: { userId, deliveredAt: null } },
     },
     {
       $set: {
@@ -414,12 +641,25 @@ const markDelivered = async (userId, conversationId) => {
 const markSeen = async (userId, conversationId) => {
   const { conversation } = await getConversationForUser(conversationId, userId);
   const now = new Date();
+  const user = await User.findById(userId).select('privacy.readReceipts');
+  if (!user) throw new AppError(404, 'USER_NOT_FOUND', 'User not found');
+  if (user.privacy?.readReceipts === false) {
+    await Conversation.updateOne(
+      { _id: conversation._id, 'participants.userId': userId },
+      {
+        $set: {
+          'participants.$.unreadCount': 0,
+          'participants.$.lastReadAt': now,
+        },
+      },
+    );
+    return { count: 0, at: now, readReceiptsDisabled: true };
+  }
   const result = await Message.updateMany(
     {
       conversationId: conversation._id,
       sender: { $ne: userId },
-      'receipts.userId': userId,
-      'receipts.readAt': null,
+      receipts: { $elemMatch: { userId, readAt: null } },
     },
     {
       $set: {
@@ -468,21 +708,38 @@ const deleteMessage = async (userId, messageId, scope) => {
     message.deletedFor.push(userId);
   }
   await message.save();
+  if (
+    deletedMedia?.publicId &&
+    (await Message.exists({ 'media.publicId': deletedMedia.publicId }))
+  ) {
+    deletedMedia.publicId = null;
+  }
   if (scope === 'all') {
-    const recipientReceipt = message.receipts.find(
-      (receipt) => receipt.userId.toString() === otherUserId.toString(),
+    await Conversation.updateOne(
+      { _id: conversation._id },
+      { $pull: { pinnedMessages: { messageId: message._id } } },
     );
-    if (recipientReceipt && !recipientReceipt.readAt) {
+  }
+  if (scope === 'all') {
+    const unreadRecipientIds = message.receipts
+      .filter((receipt) => !receipt.readAt)
+      .map((receipt) => receipt.userId);
+    if (
+      otherUserId &&
+      !message.receipts.some((receipt) => receipt.userId.toString() === otherUserId.toString())
+    ) {
+      unreadRecipientIds.push(otherUserId);
+    }
+    for (const recipientId of unreadRecipientIds) {
       const unreadCount = await Message.countDocuments({
         conversationId: conversation._id,
-        sender: { $ne: otherUserId },
-        'receipts.userId': otherUserId,
-        'receipts.readAt': null,
-        deletedFor: { $ne: otherUserId },
+        sender: { $ne: recipientId },
+        receipts: { $elemMatch: { userId: recipientId, readAt: null } },
+        deletedFor: { $ne: recipientId },
         deletedForAll: false,
       });
       await Conversation.updateOne(
-        { _id: conversation._id, 'participants.userId': otherUserId },
+        { _id: conversation._id, 'participants.userId': recipientId },
         { $set: { 'participants.$.unreadCount': unreadCount } },
       );
     }
@@ -499,8 +756,7 @@ const deleteMessage = async (userId, messageId, scope) => {
     const unreadCount = await Message.countDocuments({
       conversationId: conversation._id,
       sender: { $ne: userId },
-      'receipts.userId': userId,
-      'receipts.readAt': null,
+      receipts: { $elemMatch: { userId, readAt: null } },
       deletedFor: { $ne: userId },
       deletedForAll: false,
     });
@@ -521,11 +777,21 @@ module.exports = {
   createOrGetDirectConversation,
   authorizeDirectMessage,
   deleteMessage,
+  editMessage,
+  forwardMessage,
   getConversationForUser,
   getConversationList,
   getMessageHistory,
+  getPinnedMessages,
+  getStarredMessages,
   markDelivered,
   markSeen,
+  pinMessage,
+  searchMessages,
   saveMediaMessage,
+  serializeMessage,
   sendTextMessage,
+  toggleMessageReaction,
+  toggleStarMessage,
+  unpinMessage,
 };

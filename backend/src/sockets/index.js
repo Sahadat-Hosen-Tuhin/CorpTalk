@@ -10,6 +10,9 @@ const {
 } = require('../services/presenceService');
 const AppError = require('../utils/AppError');
 const attachChatSocket = require('./chatSocket');
+const attachCallSocket = require('./callSocket');
+const attachMeetingSocket = require('./meetingSocket');
+const { endActiveCallForUser } = require('../services/callService');
 
 const emitPresenceToFriends = async (io, user, presence) => {
   const friendships = await Friendship.find({
@@ -74,6 +77,8 @@ const createSocketServer = (httpServer) => {
       Math.max(0, socket.data.accessTokenExpiresAt - Date.now()),
     );
     attachChatSocket(io, socket);
+    attachCallSocket(io, socket);
+    attachMeetingSocket(io, socket);
 
     if (becameOnline) {
       void User.updateOne({ _id: user._id }, { $set: { isOnline: true } })
@@ -111,6 +116,7 @@ const createSocketServer = (httpServer) => {
         return;
       }
 
+      void endActiveCallForUser(io, userId);
       const lastSeen = new Date();
       void User.updateOne({ _id: user._id }, { $set: { isOnline: false, lastSeen } })
         .then(async (result) => {

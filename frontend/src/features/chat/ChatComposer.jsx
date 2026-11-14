@@ -2,7 +2,15 @@ import { useEffect, useRef, useState } from 'react';
 import EmojiPicker from 'emoji-picker-react';
 import { ImagePlus, Mic, Paperclip, Send, Smile, Square, X } from 'lucide-react';
 
-function ChatComposer({ disabled, onSendFile, onSendText, replyTo, onCancelReply }) {
+function ChatComposer({
+  disabled,
+  onSendFile,
+  onSendText,
+  onTypingStart,
+  onTypingStop,
+  replyTo,
+  onCancelReply,
+}) {
   const [text, setText] = useState('');
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -10,18 +18,44 @@ function ChatComposer({ disabled, onSendFile, onSendText, replyTo, onCancelReply
   const fileInputRef = useRef(null);
   const recorderRef = useRef(null);
   const streamRef = useRef(null);
+  const typingTimerRef = useRef(null);
+  const typingActiveRef = useRef(false);
+
+  const stopTyping = () => {
+    if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+    typingTimerRef.current = null;
+    if (typingActiveRef.current) onTypingStop?.();
+    typingActiveRef.current = false;
+  };
+
+  const changeText = (value) => {
+    setText(value);
+    if (!value.trim() || disabled) {
+      stopTyping();
+      return;
+    }
+    if (!typingActiveRef.current) {
+      typingActiveRef.current = true;
+      onTypingStart?.();
+    }
+    if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+    typingTimerRef.current = window.setTimeout(stopTyping, 2000);
+  };
 
   useEffect(
     () => () => {
       streamRef.current?.getTracks().forEach((track) => track.stop());
+      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+      if (typingActiveRef.current) onTypingStop?.();
     },
-    [],
+    [onTypingStop],
   );
 
   const submit = (event) => {
     event.preventDefault();
     const message = text.trim();
     if (!message || disabled) return;
+    stopTyping();
     onSendText(message);
     setText('');
     onCancelReply();
@@ -31,6 +65,7 @@ function ChatComposer({ disabled, onSendFile, onSendText, replyTo, onCancelReply
     const [file] = event.target.files || [];
     if (file) {
       onSendFile(file, '');
+      stopTyping();
       onCancelReply();
     }
     event.target.value = '';
@@ -123,7 +158,8 @@ function ChatComposer({ disabled, onSendFile, onSendText, replyTo, onCancelReply
         />
         <textarea
           value={text}
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => changeText(event.target.value)}
+          onBlur={stopTyping}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault();

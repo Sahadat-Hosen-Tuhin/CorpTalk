@@ -51,7 +51,7 @@ const meetingSchema = new Schema(
     },
     allowEarlyJoin: {
       type: Boolean,
-      default: false,
+      default: true,
     },
     earlyJoinMinutes: {
       type: Number,
@@ -69,6 +69,10 @@ const meetingSchema = new Schema(
         },
         message: 'Invited users must be unique',
       },
+    },
+    removedUsers: {
+      type: [{ type: Schema.Types.ObjectId, ref: 'User' }],
+      default: [],
     },
     meetingLink: {
       type: String,

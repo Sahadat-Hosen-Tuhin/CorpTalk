@@ -5,6 +5,7 @@ const app = require('./app');
 const { connectDB, disconnectDB } = require('./config/db');
 const createSocketServer = require('./sockets');
 const { resetPresence } = require('./services/presenceService');
+const { startMeetingReminderWorker } = require('./services/meetingReminderService');
 
 const startServer = async () => {
   await connectDB();
@@ -19,9 +20,18 @@ const startServer = async () => {
   const httpServer = http.createServer(application);
   const io = createSocketServer(httpServer);
   application.set('io', io);
+  let meetingJobs;
+  try {
+    meetingJobs = await startMeetingReminderWorker(io);
+  } catch (error) {
+    await new Promise((resolve) => io.close(resolve));
+    await disconnectDB();
+    throw error;
+  }
   const port = Number(process.env.PORT || 5000);
 
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    await meetingJobs.close();
     await new Promise((resolve) => io.close(resolve));
     await disconnectDB();
     throw new Error('PORT must be an integer between 0 and 65535');
@@ -33,6 +43,7 @@ const startServer = async () => {
       httpServer.listen(port, resolve);
     });
   } catch (error) {
+    await meetingJobs.close();
     await new Promise((resolve) => io.close(resolve));
     await disconnectDB();
     throw error;
@@ -43,7 +54,10 @@ const startServer = async () => {
   let shutdownPromise;
   const shutdown = () => {
     if (!shutdownPromise) {
-      shutdownPromise = new Promise((resolve) => io.close(resolve)).then(disconnectDB);
+      shutdownPromise = Promise.all([
+        new Promise((resolve) => io.close(resolve)),
+        meetingJobs.close(),
+      ]).then(disconnectDB);
     }
 
     return shutdownPromise;

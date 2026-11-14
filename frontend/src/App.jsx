@@ -7,6 +7,11 @@ import HomeRedirect from './components/HomeRedirect.jsx';
 import RequireAuth from './components/RequireAuth.jsx';
 import DashboardPage from './pages/DashboardPage.jsx';
 import ChatPage from './pages/ChatPage.jsx';
+import CallHistoryPage from './pages/CallHistoryPage.jsx';
+import MeetingsPage from './pages/MeetingsPage.jsx';
+import MeetingJoinPage from './pages/MeetingJoinPage.jsx';
+import StoriesPage from './pages/StoriesPage.jsx';
+import StarredMessagesPage from './pages/StarredMessagesPage.jsx';
 import ForgotPassword from './pages/ForgotPassword.jsx';
 import Login from './pages/Login.jsx';
 import NotFoundPage from './pages/NotFoundPage.jsx';
@@ -41,6 +46,11 @@ function App() {
           <Route path="profile" element={<Profile />} />
           <Route path="chat" element={<ChatPage />} />
           <Route path="chat/:conversationId" element={<ChatPage />} />
+          <Route path="calls" element={<CallHistoryPage />} />
+          <Route path="meetings" element={<MeetingsPage />} />
+          <Route path="meet/:meetingLink" element={<MeetingJoinPage />} />
+          <Route path="stories" element={<StoriesPage />} />
+          <Route path="starred" element={<StarredMessagesPage />} />
           <Route path="dashboard" element={<DashboardPage />} />
           <Route path="setup" element={<SetupPage />} />
           <Route path="404" element={<NotFoundPage />} />

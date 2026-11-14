@@ -11,7 +11,9 @@ jest.mock('../src/services/emailService', () => ({
 }));
 jest.mock('../src/services/pushService', () => ({
   sendFriendRequestPush: jest.fn().mockResolvedValue(undefined),
+  sendMeetingPush: jest.fn().mockResolvedValue(undefined),
   sendMessagePush: jest.fn().mockResolvedValue(undefined),
+  sendMissedCallPush: jest.fn().mockResolvedValue(undefined),
 }));
 
 const http = require('node:http');
@@ -22,14 +24,24 @@ const { io: createClient } = require('socket.io-client');
 const createApp = require('../src/app');
 const createSocketServer = require('../src/sockets');
 const Block = require('../src/models/block');
+const Call = require('../src/models/call');
 const Conversation = require('../src/models/conversation');
 const Friendship = require('../src/models/friendship');
 const Message = require('../src/models/message');
+const Meeting = require('../src/models/meeting');
+const MeetingJoinRequest = require('../src/models/meetingJoinRequest');
+const Report = require('../src/models/report');
+const Story = require('../src/models/story');
 const Otp = require('../src/models/otp');
 const RefreshSession = require('../src/models/refreshSession');
 const User = require('../src/models/user');
 const { sendOtpEmail } = require('../src/services/emailService');
-const { sendFriendRequestPush, sendMessagePush } = require('../src/services/pushService');
+const {
+  sendFriendRequestPush,
+  sendMeetingPush,
+  sendMessagePush,
+  sendMissedCallPush,
+} = require('../src/services/pushService');
 
 const MONGODB_MEMORY_SERVER_VERSION = '7.0.14';
 const app = createApp();
@@ -109,6 +121,17 @@ const waitForEvent = (client, eventName) =>
     client.on(eventName, listener);
   });
 
+const emitSocketEvent = (client, eventName, payload) =>
+  new Promise((resolve, reject) => {
+    client.timeout(3000).emit(eventName, payload, (timeoutError, response) => {
+      if (timeoutError) {
+        reject(timeoutError);
+        return;
+      }
+      resolve(response);
+    });
+  });
+
 beforeAll(async () => {
   mongo = await MongoMemoryServer.create({
     binary: { version: MONGODB_MEMORY_SERVER_VERSION },
@@ -116,9 +139,14 @@ beforeAll(async () => {
   await mongoose.connect(mongo.getUri(), { serverSelectionTimeoutMS: 5000 });
   await Promise.all([
     Block.init(),
+    Call.init(),
     Conversation.init(),
     Friendship.init(),
     Message.init(),
+    Meeting.init(),
+    MeetingJoinRequest.init(),
+    Report.init(),
+    Story.init(),
     Otp.init(),
     RefreshSession.init(),
     User.init(),
@@ -128,12 +156,19 @@ beforeAll(async () => {
 beforeEach(async () => {
   sendOtpEmail.mockClear();
   sendFriendRequestPush.mockClear();
+  sendMeetingPush.mockClear();
   sendMessagePush.mockClear();
+  sendMissedCallPush.mockClear();
   await Promise.all([
     Block.deleteMany({}),
+    Call.deleteMany({}),
     Conversation.deleteMany({}),
     Friendship.deleteMany({}),
     Message.deleteMany({}),
+    Meeting.deleteMany({}),
+    MeetingJoinRequest.deleteMany({}),
+    Report.deleteMany({}),
+    Story.deleteMany({}),
     Otp.deleteMany({}),
     RefreshSession.deleteMany({}),
     User.deleteMany({}),
@@ -162,6 +197,197 @@ afterAll(async () => {
 });
 
 describe('direct messaging API and sockets', () => {
+  test('supports authorized voice calls, WebRTC signaling, ending, and paginated call history', async () => {
+    const caller = await registerAndLogin('calls.caller@example.com', 'Caller');
+    const receiver = await registerAndLogin('calls.receiver@example.com', 'Receiver');
+    await makeFriends(caller.userId, receiver.userId);
+    const receiverSocket = await connectClient(receiver.token);
+    const callerSocket = await connectClient(caller.token);
+    const incomingCall = waitForEvent(receiverSocket, 'call:invite');
+    const inviteResponse = await emitSocketEvent(callerSocket, 'call:invite', {
+      recipientId: receiver.userId,
+      type: 'voice',
+    });
+
+    expect(inviteResponse).toMatchObject({
+      data: { type: 'voice', recipient: { id: receiver.userId, name: 'Receiver' } },
+    });
+    const invitation = await incomingCall;
+    expect(invitation).toMatchObject({
+      callId: inviteResponse.data.callId,
+      type: 'voice',
+      caller: { id: caller.userId, name: 'Caller' },
+    });
+
+    const acceptedEvent = waitForEvent(callerSocket, 'call:accept');
+    const acceptResponse = await emitSocketEvent(receiverSocket, 'call:accept', {
+      callId: invitation.callId,
+    });
+    expect(acceptResponse.data).toMatchObject({ callId: invitation.callId, type: 'voice' });
+    await expect(acceptedEvent).resolves.toMatchObject({ callId: invitation.callId });
+
+    const offerEvent = waitForEvent(receiverSocket, 'webrtc:offer');
+    const offerResponse = await emitSocketEvent(callerSocket, 'webrtc:offer', {
+      callId: invitation.callId,
+      description: { type: 'offer', sdp: 'v=0' },
+    });
+    expect(offerResponse).toEqual({ data: undefined });
+    await expect(offerEvent).resolves.toMatchObject({
+      callId: invitation.callId,
+      description: { type: 'offer', sdp: 'v=0' },
+    });
+
+    const endedEvent = waitForEvent(receiverSocket, 'call:end');
+    const endResponse = await emitSocketEvent(callerSocket, 'call:end', {
+      callId: invitation.callId,
+    });
+    expect(endResponse.data).toMatchObject({ status: 'ended' });
+    await expect(endedEvent).resolves.toMatchObject({ callId: invitation.callId, status: 'ended' });
+
+    const history = await request(app)
+      .get('/api/v1/calls')
+      .set('Authorization', `Bearer ${caller.token}`);
+    expect(history.status).toBe(200);
+    expect(history.body.data.calls).toHaveLength(1);
+    expect(history.body.data.calls[0]).toMatchObject({
+      id: invitation.callId,
+      type: 'voice',
+      status: 'ended',
+      direction: 'dialed',
+      peer: { id: receiver.userId, name: 'Receiver' },
+    });
+
+    await Block.create({ blocker: receiver.userId, blocked: caller.userId });
+    const blockedCall = await emitSocketEvent(callerSocket, 'call:invite', {
+      recipientId: receiver.userId,
+      type: 'video',
+    });
+    expect(blockedCall.error.code).toBe('CALL_BLOCKED');
+  });
+
+  test('creates groups, tracks member receipts, enforces permissions, and removes access live', async () => {
+    const owner = await registerAndLogin('groups.owner@example.com', 'Group Owner');
+    const member = await registerAndLogin('groups.member@example.com', 'Group Member');
+    const addedMember = await registerAndLogin('groups.added@example.com', 'Added Member');
+    await makeFriends(owner.userId, member.userId);
+    await makeFriends(owner.userId, addedMember.userId);
+
+    const created = await request(app)
+      .post('/api/v1/conversations')
+      .set('Authorization', `Bearer ${owner.token}`)
+      .send({
+        type: 'group',
+        name: 'Project Crew',
+        description: 'Shared project chat',
+        participantIds: [member.userId],
+      });
+    expect(created.status).toBe(201);
+    const conversationId = created.body.data.conversation.id;
+
+    const addMemberEvent = await request(app)
+      .post(`/api/v1/conversations/${conversationId}/members`)
+      .set('Authorization', `Bearer ${owner.token}`)
+      .send({ userId: addedMember.userId });
+    expect(addMemberEvent.status).toBe(201);
+
+    const ownerSocket = await connectClient(owner.token);
+    const memberSocket = await connectClient(member.token);
+    const joinOwner = await emitSocketEvent(ownerSocket, 'chat:join', { conversationId });
+    const joinMember = await emitSocketEvent(memberSocket, 'chat:join', { conversationId });
+    expect(joinOwner.data.joined).toBe(true);
+    expect(joinMember.data.joined).toBe(true);
+
+    const typingStart = waitForEvent(memberSocket, 'typing:start');
+    const startedTyping = await emitSocketEvent(ownerSocket, 'typing:start', { conversationId });
+    expect(startedTyping.data.typing).toBe(true);
+    await expect(typingStart).resolves.toMatchObject({
+      conversationId,
+      userId: owner.userId,
+      name: 'Group Owner',
+    });
+    const typingStop = waitForEvent(memberSocket, 'typing:stop');
+    await emitSocketEvent(ownerSocket, 'typing:stop', { conversationId });
+    await expect(typingStop).resolves.toMatchObject({ conversationId, userId: owner.userId });
+
+    const newMessage = waitForEvent(memberSocket, 'message:new');
+    const sent = await emitSocketEvent(ownerSocket, 'message:send', {
+      conversationId,
+      text: 'Welcome to the project group',
+    });
+    expect(sent.data.message.receipts).toHaveLength(2);
+    await expect(newMessage).resolves.toMatchObject({
+      conversationId,
+      sender: { id: owner.userId, name: 'Group Owner' },
+      text: 'Welcome to the project group',
+    });
+
+    const seenEvent = waitForEvent(ownerSocket, 'message:seen');
+    const seen = await emitSocketEvent(memberSocket, 'message:seen', { conversationId });
+    expect(seen.data.count).toBeGreaterThan(0);
+    await expect(seenEvent).resolves.toMatchObject({
+      conversationId,
+      userId: member.userId,
+    });
+    const history = await request(app)
+      .get(`/api/v1/conversations/${conversationId}/messages`)
+      .set('Authorization', `Bearer ${owner.token}`);
+    expect(history.body.data.messages[0].receipts).toEqual(
+      expect.arrayContaining([expect.objectContaining({ userId: member.userId })]),
+    );
+    expect(history.body.data.messages.some((message) => message.type === 'system')).toBe(true);
+
+    const permissions = await request(app)
+      .patch(`/api/v1/conversations/${conversationId}/permissions`)
+      .set('Authorization', `Bearer ${owner.token}`)
+      .send({ adminsOnlyMessages: true, adminsOnlyAddMembers: true });
+    expect(permissions.status).toBe(200);
+    const deniedAdd = await request(app)
+      .post(`/api/v1/conversations/${conversationId}/members`)
+      .set('Authorization', `Bearer ${member.token}`)
+      .send({ userId: addedMember.userId });
+    expect(deniedAdd.status).toBe(403);
+    const deniedInfoEdit = await request(app)
+      .patch(`/api/v1/conversations/${conversationId}`)
+      .set('Authorization', `Bearer ${member.token}`)
+      .send({ name: 'Unauthorized rename' });
+    expect(deniedInfoEdit.status).toBe(403);
+    const deniedMessage = await emitSocketEvent(memberSocket, 'message:send', {
+      conversationId,
+      text: 'This must be denied',
+    });
+    expect(deniedMessage.error.code).toBe('GROUP_MESSAGES_ADMIN_ONLY');
+
+    const removedEvent = waitForEvent(memberSocket, 'group:removed');
+    const removed = await request(app)
+      .delete(`/api/v1/conversations/${conversationId}/members/${member.userId}`)
+      .set('Authorization', `Bearer ${owner.token}`);
+    expect(removed.status).toBe(200);
+    await expect(removedEvent).resolves.toMatchObject({ conversationId });
+    const deniedHistory = await request(app)
+      .get(`/api/v1/conversations/${conversationId}/messages`)
+      .set('Authorization', `Bearer ${member.token}`);
+    expect(deniedHistory.status).toBe(404);
+
+    const muted = await request(app)
+      .patch(`/api/v1/conversations/${conversationId}/notifications`)
+      .set('Authorization', `Bearer ${addedMember.token}`)
+      .send({ muted: true });
+    expect(muted.status).toBe(200);
+    const conversations = await request(app)
+      .get('/api/v1/conversations')
+      .set('Authorization', `Bearer ${addedMember.token}`);
+    expect(conversations.body.data.conversations[0]).toMatchObject({
+      id: conversationId,
+      type: 'group',
+      name: 'Project Crew',
+      muted: true,
+      members: expect.arrayContaining([
+        expect.objectContaining({ id: owner.userId, role: 'owner' }),
+        expect.objectContaining({ id: addedMember.userId, role: 'member' }),
+      ]),
+    });
+  });
+
   test('supports username search, friend requests, acceptance, and unfriend without deleting history', async () => {
     const first = await registerAndLogin('friends.first@example.com', 'First Friend');
     const second = await registerAndLogin('friends.second@example.com', 'Second Friend');
@@ -644,5 +870,339 @@ describe('direct messaging API and sockets', () => {
     expect(removed.status).toBe(200);
     const afterRemoval = await User.findById(user.userId).select('+pushTokens');
     expect(afterRemoval.pushTokens).not.toContain(token);
+  });
+
+  test('schedules meetings, gates link requests, tracks decisions, and enforces rejection limits', async () => {
+    const host = await registerAndLogin('meeting.host@example.com', 'Meeting Host');
+    const invitee = await registerAndLogin('meeting.invited@example.com', 'Meeting Invitee');
+    const requester = await registerAndLogin('meeting.requester@example.com', 'Meeting Requester');
+    const acceptedRequester = await registerAndLogin(
+      'meeting.accepted@example.com',
+      'Accepted Requester',
+    );
+    const startTime = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const createMeeting = async (values) =>
+      request(app)
+        .post('/api/v1/meetings')
+        .set('Authorization', `Bearer ${host.token}`)
+        .send({
+          title: 'Planning session',
+          description: 'Project planning',
+          startTime,
+          durationMinutes: 45,
+          timezone: 'UTC',
+          allowEarlyJoin: true,
+          earlyJoinMinutes: 10,
+          ...values,
+        });
+
+    const linkMeetingResponse = await createMeeting({
+      accessType: 'link',
+      allowLinkRequests: true,
+    });
+    expect(linkMeetingResponse.status).toBe(201);
+    const linkMeeting = linkMeetingResponse.body.data.meeting;
+    expect(linkMeeting.meetingLink).toMatch(/^[a-zA-Z0-9_-]{10}$/);
+    expect(linkMeeting.url).toContain(`/meet/${linkMeeting.meetingLink}`);
+
+    const hostSocket = await connectClient(host.token);
+    const requesterSocket = await connectClient(requester.token);
+    const acceptedRequesterSocket = await connectClient(acceptedRequester.token);
+    const inviteeSocket = await connectClient(invitee.token);
+    const privateStatus = await request(app)
+      .get(`/api/v1/meetings/link/${linkMeeting.meetingLink}`)
+      .set('Authorization', `Bearer ${requester.token}`);
+    expect(privateStatus.body.data.meeting.accessStatus).toBe('request_required');
+
+    let activeRequestId;
+    for (let rejectionCount = 1; rejectionCount <= 3; rejectionCount += 1) {
+      const requestEvent = waitForEvent(hostSocket, 'meeting:join-request');
+      const sentRequest = await request(app)
+        .post(`/api/v1/meetings/${linkMeeting.id}/request`)
+        .set('Authorization', `Bearer ${requester.token}`)
+        .send({});
+      expect(sentRequest.status).toBe(201);
+      const hostNotification = await requestEvent;
+      activeRequestId = hostNotification.request.id;
+      expect(hostNotification.request.user.id).toBe(requester.userId);
+
+      const pendingAgain = await request(app)
+        .post(`/api/v1/meetings/${linkMeeting.id}/request`)
+        .set('Authorization', `Bearer ${requester.token}`)
+        .send({});
+      expect(pendingAgain.status).toBe(409);
+
+      const decisionEvent = waitForEvent(requesterSocket, 'meeting:request-decision');
+      const decision = await request(app)
+        .post(`/api/v1/meetings/${linkMeeting.id}/requests/${activeRequestId}/decision`)
+        .set('Authorization', `Bearer ${host.token}`)
+        .send({ decision: 'rejected' });
+      expect(decision.status).toBe(200);
+      expect(decision.body.data.rejectionCount).toBe(rejectionCount);
+      await expect(decisionEvent).resolves.toMatchObject({
+        meetingId: linkMeeting.id,
+        status: 'rejected',
+      });
+    }
+
+    const blockedRequest = await request(app)
+      .post(`/api/v1/meetings/${linkMeeting.id}/request`)
+      .set('Authorization', `Bearer ${requester.token}`)
+      .send({});
+    expect(blockedRequest.status).toBe(429);
+    expect(blockedRequest.body.error.code).toBe('JOIN_REQUEST_BLOCKED');
+
+    const acceptanceRequestEvent = waitForEvent(hostSocket, 'meeting:join-request');
+    const acceptedRequest = await request(app)
+      .post(`/api/v1/meetings/${linkMeeting.id}/request`)
+      .set('Authorization', `Bearer ${acceptedRequester.token}`)
+      .send({});
+    expect(acceptedRequest.status).toBe(201);
+    const acceptanceRequest = await acceptanceRequestEvent;
+    const acceptedEvent = waitForEvent(acceptedRequesterSocket, 'meeting:request-decision');
+    const decision = await request(app)
+      .post(`/api/v1/meetings/${linkMeeting.id}/requests/${acceptanceRequest.request.id}/decision`)
+      .set('Authorization', `Bearer ${host.token}`)
+      .send({ decision: 'accepted' });
+    expect(decision.status).toBe(200);
+    await expect(acceptedEvent).resolves.toMatchObject({
+      meetingId: linkMeeting.id,
+      status: 'accepted',
+    });
+    const acceptedAccess = await request(app)
+      .get(`/api/v1/meetings/link/${linkMeeting.meetingLink}`)
+      .set('Authorization', `Bearer ${acceptedRequester.token}`);
+    expect(acceptedAccess.body.data.meeting).toMatchObject({
+      accessStatus: 'waiting',
+      request: { status: 'accepted' },
+    });
+    const earlyToken = await request(app)
+      .post(`/api/v1/meetings/${linkMeeting.id}/token`)
+      .set('Authorization', `Bearer ${acceptedRequester.token}`);
+    expect(earlyToken.status).toBe(409);
+    expect(earlyToken.body.error.code).toBe('MEETING_NOT_STARTED');
+
+    const updatedStart = await request(app)
+      .patch(`/api/v1/meetings/${linkMeeting.id}`)
+      .set('Authorization', `Bearer ${host.token}`)
+      .send({ startTime: new Date(Date.now() + 5 * 60 * 1000).toISOString() });
+    expect(updatedStart.status).toBe(200);
+    const unjoinedHand = await emitSocketEvent(acceptedRequesterSocket, 'meeting:raise-hand', {
+      meetingId: linkMeeting.id,
+    });
+    expect(unjoinedHand.error.code).toBe('MEETING_ROOM_REQUIRED');
+    const removed = await request(app)
+      .delete(`/api/v1/meetings/${linkMeeting.id}/participants/${acceptedRequester.userId}`)
+      .set('Authorization', `Bearer ${host.token}`);
+    expect(removed.status).toBe(200);
+    const removedAccess = await request(app)
+      .get(`/api/v1/meetings/link/${linkMeeting.meetingLink}`)
+      .set('Authorization', `Bearer ${acceptedRequester.token}`);
+    expect(removedAccess.body.data.meeting.accessStatus).toBe('removed');
+    const removedToken = await request(app)
+      .post(`/api/v1/meetings/${linkMeeting.id}/token`)
+      .set('Authorization', `Bearer ${acceptedRequester.token}`);
+    expect(removedToken.status).toBe(403);
+
+    const pendingEvent = waitForEvent(hostSocket, 'meeting:join-request');
+    const pendingRequest = await request(app)
+      .post(`/api/v1/meetings/${linkMeeting.id}/request`)
+      .set('Authorization', `Bearer ${invitee.token}`)
+      .send({});
+    expect(pendingRequest.status).toBe(201);
+    const pendingNotification = await pendingEvent;
+    const cancelledRequestEvent = waitForEvent(inviteeSocket, 'meeting:request-decision');
+    const disabledRequests = await request(app)
+      .patch(`/api/v1/meetings/${linkMeeting.id}`)
+      .set('Authorization', `Bearer ${host.token}`)
+      .send({ allowLinkRequests: false });
+    expect(disabledRequests.status).toBe(200);
+    await expect(cancelledRequestEvent).resolves.toMatchObject({
+      meetingId: linkMeeting.id,
+      status: 'cancelled',
+    });
+    const cancelledRequest = await MeetingJoinRequest.findById(pendingNotification.request.id);
+    expect(cancelledRequest.status).toBe('cancelled');
+
+    const restrictedResponse = await createMeeting({
+      accessType: 'restricted',
+      invitedUsers: [invitee.userId],
+    });
+    expect(restrictedResponse.status).toBe(201);
+    const restrictedMeeting = restrictedResponse.body.data.meeting;
+    const inviteeAccess = await request(app)
+      .get(`/api/v1/meetings/link/${restrictedMeeting.meetingLink}`)
+      .set('Authorization', `Bearer ${invitee.token}`);
+    expect(inviteeAccess.body.data.meeting.accessStatus).toBe('waiting');
+    const outsiderAccess = await request(app)
+      .get(`/api/v1/meetings/link/${restrictedMeeting.meetingLink}`)
+      .set('Authorization', `Bearer ${requester.token}`);
+    expect(outsiderAccess.body.data.meeting.accessStatus).toBe('private');
+    const deniedRequest = await request(app)
+      .post(`/api/v1/meetings/${restrictedMeeting.id}/request`)
+      .set('Authorization', `Bearer ${requester.token}`)
+      .send({});
+    expect(deniedRequest.status).toBe(403);
+
+    const edited = await request(app)
+      .patch(`/api/v1/meetings/${restrictedMeeting.id}`)
+      .set('Authorization', `Bearer ${invitee.token}`)
+      .send({ title: 'Unauthorized edit' });
+    expect(edited.status).toBe(403);
+    const rescheduled = await request(app)
+      .patch(`/api/v1/meetings/${restrictedMeeting.id}`)
+      .set('Authorization', `Bearer ${host.token}`)
+      .send({ startTime: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString() });
+    expect(rescheduled.status).toBe(200);
+
+    const cancelled = await request(app)
+      .delete(`/api/v1/meetings/${restrictedMeeting.id}`)
+      .set('Authorization', `Bearer ${host.token}`);
+    expect(cancelled.status).toBe(200);
+    const closedAccess = await request(app)
+      .get(`/api/v1/meetings/link/${restrictedMeeting.meetingLink}`)
+      .set('Authorization', `Bearer ${invitee.token}`);
+    expect(closedAccess.body.data.meeting.accessStatus).toBe('ended');
+  });
+
+  test('supports message actions, privacy controls, reports, and friend-only story views', async () => {
+    const alice = await registerAndLogin('phase6.alice@example.com', 'Alice');
+    const bob = await registerAndLogin('phase6.bob@example.com', 'Bob');
+    const outsider = await registerAndLogin('phase6.outsider@example.com', 'Outsider');
+    await makeFriends(alice.userId, bob.userId);
+    await makeFriends(bob.userId, outsider.userId);
+
+    const sourceConversation = await request(app)
+      .post('/api/v1/conversations')
+      .set('Authorization', `Bearer ${alice.token}`)
+      .send({ participantId: bob.userId });
+    const targetConversation = await request(app)
+      .post('/api/v1/conversations')
+      .set('Authorization', `Bearer ${bob.token}`)
+      .send({ participantId: outsider.userId });
+    const original = await request(app)
+      .post('/api/v1/messages')
+      .set('Authorization', `Bearer ${alice.token}`)
+      .send({
+        conversationId: sourceConversation.body.data.conversation.id,
+        text: 'Phase six searchable message',
+      });
+    const messageId = original.body.data.message._id;
+
+    const edited = await request(app)
+      .patch(`/api/v1/messages/${messageId}`)
+      .set('Authorization', `Bearer ${alice.token}`)
+      .send({ text: 'Phase six edited searchable message' });
+    expect(edited.status).toBe(200);
+    expect(edited.body.data.message.editedAt).toBeTruthy();
+
+    const reaction = await request(app)
+      .post(`/api/v1/messages/${messageId}/reaction`)
+      .set('Authorization', `Bearer ${bob.token}`)
+      .send({ emoji: '👍' });
+    expect(reaction.body.data.message.reactions).toHaveLength(1);
+    expect(reaction.body.data.message.reactions[0].emoji).toBe('👍');
+
+    const search = await request(app)
+      .get(`/api/v1/conversations/${sourceConversation.body.data.conversation.id}/messages/search`)
+      .query({ q: 'edited searchable' })
+      .set('Authorization', `Bearer ${bob.token}`);
+    expect(search.status).toBe(200);
+    expect(search.body.data.messages.map((message) => message._id)).toContain(messageId);
+
+    const starred = await request(app)
+      .post(`/api/v1/messages/${messageId}/star`)
+      .set('Authorization', `Bearer ${bob.token}`);
+    expect(starred.body.data.starred).toBe(true);
+    const starredList = await request(app)
+      .get('/api/v1/messages/starred')
+      .set('Authorization', `Bearer ${bob.token}`);
+    expect(starredList.body.data.messages.map((message) => message._id)).toContain(messageId);
+
+    const pins = await request(app)
+      .post(
+        `/api/v1/conversations/${sourceConversation.body.data.conversation.id}/pins/${messageId}`,
+      )
+      .set('Authorization', `Bearer ${bob.token}`);
+    expect(pins.status).toBe(200);
+    expect(pins.body.data.messages.map((message) => message._id)).toContain(messageId);
+
+    const forwarded = await request(app)
+      .post(`/api/v1/messages/${messageId}/forward`)
+      .set('Authorization', `Bearer ${bob.token}`)
+      .send({ conversationId: targetConversation.body.data.conversation.id });
+    expect(forwarded.status).toBe(201);
+    expect(forwarded.body.data.message).toMatchObject({
+      text: 'Phase six edited searchable message',
+      forwarded: true,
+    });
+
+    const report = await request(app)
+      .post('/api/v1/reports')
+      .set('Authorization', `Bearer ${bob.token}`)
+      .send({
+        reportedUserId: alice.userId,
+        messageId,
+        reason: 'harassment',
+        details: 'Test report',
+      });
+    expect(report.status).toBe(201);
+    const myReports = await request(app)
+      .get('/api/v1/reports/mine')
+      .set('Authorization', `Bearer ${bob.token}`);
+    expect(myReports.body.data.reports).toHaveLength(1);
+    const previousAdminIds = process.env.REPORT_ADMIN_USER_IDS;
+    let reviewQueue;
+    try {
+      process.env.REPORT_ADMIN_USER_IDS = bob.userId;
+      reviewQueue = await request(app)
+        .get('/api/v1/reports/admin')
+        .set('Authorization', `Bearer ${bob.token}`);
+    } finally {
+      if (previousAdminIds === undefined) delete process.env.REPORT_ADMIN_USER_IDS;
+      else process.env.REPORT_ADMIN_USER_IDS = previousAdminIds;
+    }
+    expect(reviewQueue.body.data.reports).toHaveLength(1);
+
+    const privacy = await request(app)
+      .patch('/api/v1/users/me/preferences')
+      .set('Authorization', `Bearer ${bob.token}`)
+      .send({
+        privacy: { callPermission: 'nobody', readReceipts: false },
+        settings: { theme: 'dark' },
+      });
+    expect(privacy.status).toBe(200);
+    expect(privacy.body.data.user.privacy.callPermission).toBe('nobody');
+    expect(privacy.body.data.user.settings.theme).toBe('dark');
+    const { markSeen } = require('../src/services/chatService');
+    const hiddenReceipt = await markSeen(bob.userId, sourceConversation.body.data.conversation.id);
+    expect(hiddenReceipt).toMatchObject({ count: 0, readReceiptsDisabled: true });
+
+    const callService = require('../src/services/callService');
+    const caller = await User.findById(alice.userId);
+    await expect(
+      callService.inviteCall(ioServer, caller, bob.userId, 'voice'),
+    ).rejects.toMatchObject({ code: 'CALLS_DISABLED' });
+
+    const story = await Story.create({
+      userId: alice.userId,
+      mediaUrl: 'https://res.cloudinary.com/test/story.jpg',
+      mediaType: 'image',
+      caption: 'Friends-only story',
+    });
+    const friendFeed = await request(app)
+      .get('/api/v1/stories')
+      .set('Authorization', `Bearer ${bob.token}`);
+    expect(friendFeed.body.data.stories.map((item) => item.id)).toContain(story._id.toString());
+    const outsiderFeed = await request(app)
+      .get('/api/v1/stories')
+      .set('Authorization', `Bearer ${alice.token}`);
+    expect(outsiderFeed.body.data.stories).toHaveLength(1);
+    const viewed = await request(app)
+      .post(`/api/v1/stories/${story._id}/view`)
+      .set('Authorization', `Bearer ${bob.token}`);
+    expect(viewed.status).toBe(200);
+    const storedStory = await Story.findById(story._id);
+    expect(storedStory.viewers.map((viewer) => viewer.userId.toString())).toContain(bob.userId);
   });
 });

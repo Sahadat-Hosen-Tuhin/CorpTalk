@@ -9,7 +9,11 @@ const errorHandler = require('./middlewares/errorHandler');
 const notFound = require('./middlewares/notFound');
 const authRoutes = require('./routes/authRoutes');
 const chatRoutes = require('./routes/chatRoutes');
+const callRoutes = require('./routes/callRoutes');
 const friendsRoutes = require('./routes/friendsRoutes');
+const meetingRoutes = require('./routes/meetingRoutes');
+const reportRoutes = require('./routes/reportRoutes');
+const storyRoutes = require('./routes/storyRoutes');
 const userRoutes = require('./routes/userRoutes');
 
 const createApp = () => {
@@ -49,6 +53,10 @@ const createApp = () => {
 
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/v1', chatRoutes);
+  app.use('/api/v1/calls', callRoutes);
+  app.use('/api/v1/meetings', meetingRoutes);
+  app.use('/api/v1/reports', reportRoutes);
+  app.use('/api/v1/stories', storyRoutes);
   app.use('/api/v1/friends', friendsRoutes);
   app.use('/api/v1/users', userRoutes);
   app.use(notFound);

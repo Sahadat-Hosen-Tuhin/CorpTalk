@@ -99,4 +99,75 @@ const sendFriendRequestPush = async ({ recipientId, requester }) => {
   }
 };
 
-module.exports = { sendFriendRequestPush, sendMessagePush };
+const sendMissedCallPush = async ({ recipientId, callerName, type }) => {
+  const user = await User.findById(recipientId).select('+pushTokens isOnline settings');
+  if (!user || user.isOnline || !user.settings?.notificationsEnabled || !user.pushTokens?.length) {
+    return;
+  }
+  const title = type === 'video' ? 'Missed video call' : 'Missed voice call';
+  const body = `${callerName || 'A friend'} tried to call you`;
+  const url = new URL(
+    '/calls',
+    process.env.CLIENT_URL || process.env.APP_URL || 'http://localhost:5173',
+  ).toString();
+  const result = await getMessaging().sendEachForMulticast({
+    tokens: user.pushTokens,
+    notification: { title, body },
+    data: { url },
+    webpush: {
+      fcmOptions: { link: url },
+      notification: { icon: '/favicon.svg', tag: 'missed-calls' },
+    },
+  });
+  const invalidTokens = result.responses.flatMap((response, index) =>
+    response.error &&
+    [
+      'messaging/invalid-registration-token',
+      'messaging/registration-token-not-registered',
+    ].includes(response.error.code)
+      ? [user.pushTokens[index]]
+      : [],
+  );
+  if (invalidTokens.length) {
+    await User.updateOne({ _id: user._id }, { $pull: { pushTokens: { $in: invalidTokens } } });
+  }
+};
+
+const sendMeetingPush = async ({ recipientId, title, body, meetingLink }) => {
+  const user = await User.findById(recipientId).select('+pushTokens isOnline settings');
+  if (!user || user.isOnline || !user.settings?.notificationsEnabled || !user.pushTokens?.length) {
+    return;
+  }
+  const url = new URL(
+    `/meet/${encodeURIComponent(meetingLink)}`,
+    process.env.CLIENT_URL || process.env.APP_URL || 'http://localhost:5173',
+  ).toString();
+  const result = await getMessaging().sendEachForMulticast({
+    tokens: user.pushTokens,
+    notification: { title: title.slice(0, 120), body: body.slice(0, 120) },
+    data: { meetingLink, url },
+    webpush: {
+      fcmOptions: { link: url },
+      notification: { icon: '/favicon.svg', tag: `meeting-${meetingLink}` },
+    },
+  });
+  const invalidTokens = result.responses.flatMap((response, index) =>
+    response.error &&
+    [
+      'messaging/invalid-registration-token',
+      'messaging/registration-token-not-registered',
+    ].includes(response.error.code)
+      ? [user.pushTokens[index]]
+      : [],
+  );
+  if (invalidTokens.length) {
+    await User.updateOne({ _id: user._id }, { $pull: { pushTokens: { $in: invalidTokens } } });
+  }
+};
+
+module.exports = {
+  sendFriendRequestPush,
+  sendMeetingPush,
+  sendMessagePush,
+  sendMissedCallPush,
+};

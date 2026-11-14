@@ -55,7 +55,7 @@ The backend listens on `PORT` (default `5000`) after MongoDB connects. Check `GE
 
 Run backend tests and checks with `npm test`, `npm run lint`, and `npm run format:check` from `backend/`. Run the frontend checks with `npm run lint`, `npm run format:check`, and `npm run build` from `frontend/`.
 
-Redis/BullMQ, LiveKit, TURN/STUN, AI, and monitoring values in `backend/.env.example` are reserved for their later phases. FCM is used for optional offline chat notifications. For production, set `COOKIE_SECURE=true`, use strong unique JWT secrets, and supply credentials through the hosting provider's secret manager. `GOOGLE_APPLICATION_CREDENTIALS` should point to a Firebase service-account file kept outside version control.
+Redis/BullMQ, LiveKit, TURN/STUN, AI, and monitoring values in `backend/.env.example` are used by later features. FCM is used for optional offline chat and meeting notifications. For production, set `COOKIE_SECURE=true`, use strong unique JWT secrets, and supply credentials through the hosting provider's secret manager. `GOOGLE_APPLICATION_CREDENTIALS` should point to a Firebase service-account file kept outside version control.
 
 ### Model layout
 
@@ -145,6 +145,86 @@ sidebar includes exact-username search, friend/request tabs, accept/reject/cance
 unblock actions. Media uploads use Cloudinary and validate file signatures; images are capped at
 10 MB and video/audio/PDF files at 50 MB. Push notifications are opt-in and require the Firebase
 browser values in `frontend/.env` plus backend FCM credentials.
+
+## Phase 3 voice and video calls
+
+The chat header provides 1-to-1 voice and video calls. Calls require an accepted friendship and are
+blocked if either participant has blocked the other. The authenticated Socket.IO signaling layer
+handles invitations, accept/reject/end, WebRTC offer/answer/ICE forwarding, busy status, and a
+30-second missed-call timeout. Call records are available at `/calls` and through the paginated
+`GET /api/v1/calls` endpoint. Missed calls are also sent through the existing optional FCM setup
+when the recipient is offline.
+
+WebRTC uses the configured `CALL_STUN_URL` (Google's public STUN endpoint by default). For reliable
+calls across restrictive networks, deploy a TURN service and set `CALL_TURN_URLS`,
+`CALL_TURN_USERNAME`, and `CALL_TURN_CREDENTIAL` in the backend environment. TURN credentials are
+sent only to authenticated call participants, but static credentials can be extracted from clients;
+use short-lived TURN credentials or restrict and rotate static credentials. Do not expose TURN
+secrets in frontend `VITE_*` variables. Production calls require HTTPS so browsers grant camera and
+microphone access. Test with two devices and networks; localhost-only tests do not verify NAT
+traversal. The in-memory busy-call registry, like presence, currently requires a single realtime
+backend instance until shared state is added.
+
+## Phase 4 group chat
+
+Create groups through `POST /api/v1/conversations` with `type: "group"`, a name, and accepted-friend
+IDs. Group owners/admins can manage membership and admin roles, update group metadata and avatar,
+and configure the `adminsOnlyMessages`, `adminsOnlyAddMembers`, and `adminsOnlyEditInfo` permissions.
+Members can leave and mute group push notifications; removing a member immediately revokes history
+access and evicts their sockets from the group room. If the owner leaves, ownership transfers to the
+longest-standing remaining member.
+
+Group endpoints include `PATCH /api/v1/conversations/:id`, `POST /api/v1/conversations/:id/avatar`,
+`POST/DELETE /api/v1/conversations/:id/members`, `POST /api/v1/conversations/:id/leave`,
+`PATCH /api/v1/conversations/:id/members/:userId/admin`,
+`PATCH /api/v1/conversations/:id/permissions`, and
+`PATCH /api/v1/conversations/:id/notifications`. Group messages carry per-member delivery/read
+receipts; membership changes are stored as system messages. Socket.IO group rooms deliver messages,
+updates, receipts, and typing events. Typing starts/stops are authorized by current membership and
+the server also expires stale typing indicators automatically.
+
+## Phase 5 scheduled meetings
+
+The `/meetings` page supports scheduling, editing and cancelling meetings, restricted invite-only or
+link access, and host-approved join requests. Meeting URLs are shareable; a user removed by the host
+cannot rejoin unless the host explicitly invites them again. Hosts can mute or remove participants,
+end a room, and extend a live meeting. Meeting times are stored in UTC and displayed in the browser's
+local timezone.
+
+The authenticated API is rooted at `/api/v1/meetings`: `GET/POST /` lists and creates meetings;
+`GET /:meetingId` and `GET /link/:meetingLink` return meeting details; `PATCH /:meetingId` edits;
+`DELETE /:meetingId` cancels; `POST /:meetingId/request` submits a link-access request;
+`POST /:meetingId/requests/:requestId/decision` accepts or rejects it;
+`POST /:meetingId/token` issues an authorized LiveKit token;
+`PATCH /:meetingId/participants/:userId/mute` and
+`DELETE /:meetingId/participants/:userId` apply host controls;
+`POST /:meetingId/end` ends the room; and `POST /:meetingId/extend` extends a live meeting.
+Socket.IO distributes meeting requests, access decisions, reminders, participant controls, and
+meeting lifecycle events.
+
+Configure backend `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` for group video rooms.
+Keep the API secret on the server; authenticated participants receive scoped, short-lived room
+tokens only after the backend checks meeting access. Configure `REDIS_URL` to enable durable
+15/5-minute reminders, duration warnings, and automatic room ending through BullMQ. Without Redis,
+the server logs a warning and these background reminders/automatic ending are disabled; manual host
+controls remain available. Offline meeting notifications additionally require the optional FCM setup
+described above. For production, deploy Redis and LiveKit and set all credentials through the hosting
+provider's secret manager.
+
+## Phase 6 chat, privacy, stories, and call polish
+
+Chat supports author-only message edits (within 15 minutes), forwarding, emoji reactions, starring,
+conversation pins, and conversation-scoped text search. Users can report a user or message; report
+review endpoints are restricted to IDs in the comma-separated backend `REPORT_ADMIN_USER_IDS`
+environment variable. Users can configure read receipts, online/profile visibility, friend requests,
+call permissions, notifications, language, and light/dark/system theme from Profile. Call privacy is
+enforced by the backend, while blocks always prevent calls. Stories support image/video upload,
+friend-only feeds, explicit view tracking, deletion, and 24-hour expiration. Story uploads use the
+existing Cloudinary configuration.
+
+Advanced encryption, multi-device synchronization, call recording, and channels are intentionally
+not included in this phase: encryption must be designed alongside server-side search and AI, and
+recording/channels require additional infrastructure and privacy decisions.
 
 ## Backend dependencies
 
