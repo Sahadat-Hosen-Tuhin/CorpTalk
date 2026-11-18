@@ -15,9 +15,19 @@ export const getFriends = async (search = '') => {
   return response.data.data.friends;
 };
 
+export const getRecentFriends = async () => {
+  const response = await apiClient.get('/friends', { params: { sort: 'recent' } });
+  return response.data.data.friends;
+};
+
 export const searchUsers = async (username) => {
   const response = await apiClient.get('/users/search', { params: { username } });
   return response.data.data.users;
+};
+
+export const getPublicProfile = async (profileSlug) => {
+  const response = await apiClient.get(`/users/profile/${encodeURIComponent(profileSlug)}`);
+  return response.data.data.user;
 };
 
 export const getFriendRequests = async () => {

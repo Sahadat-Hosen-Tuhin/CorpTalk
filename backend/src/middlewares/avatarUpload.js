@@ -1,23 +1,29 @@
 const multer = require('multer');
 const AppError = require('../utils/AppError');
 
-const uploadAvatar = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
-  fileFilter(_req, file, callback) {
-    const supportedTypes = ['image/jpeg', 'image/png', 'image/webp'];
-    if (!supportedTypes.includes(file.mimetype)) {
-      callback(new AppError(400, 'UNSUPPORTED_IMAGE_TYPE', 'Use a JPEG, PNG, or WebP image'));
-      return;
-    }
-    callback(null, true);
-  },
-});
+const createImageUpload = () =>
+  multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+    fileFilter(_req, file, callback) {
+      const supportedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+      if (!supportedTypes.includes(file.mimetype)) {
+        callback(new AppError(400, 'UNSUPPORTED_IMAGE_TYPE', 'Use a JPEG, PNG, or WebP image'));
+        return;
+      }
+      callback(null, true);
+    },
+  });
 
-const validateAvatarSignature = (req, _res, next) => {
+const uploadAvatar = createImageUpload();
+const uploadCoverPhoto = createImageUpload();
+
+const validateImageSignature = (fieldName, label) => (req, _res, next) => {
   const file = req.file;
   if (!file) {
-    next(new AppError(400, 'AVATAR_REQUIRED', 'Choose an image to upload'));
+    next(
+      new AppError(400, `${fieldName.toUpperCase()}_REQUIRED`, `Choose an image for your ${label}`),
+    );
     return;
   }
 
@@ -40,4 +46,12 @@ const validateAvatarSignature = (req, _res, next) => {
   next();
 };
 
-module.exports = { uploadAvatar, validateAvatarSignature };
+const validateAvatarSignature = validateImageSignature('avatar', 'avatar');
+const validateCoverPhotoSignature = validateImageSignature('cover_photo', 'cover photo');
+
+module.exports = {
+  uploadAvatar,
+  uploadCoverPhoto,
+  validateAvatarSignature,
+  validateCoverPhotoSignature,
+};

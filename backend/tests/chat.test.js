@@ -514,6 +514,87 @@ describe('direct messaging API and sockets', () => {
     await expect(privatePresence).rejects.toThrow('presence:update event timed out');
   });
 
+  test('lists recent friends first only when the recent sort is requested', async () => {
+    const owner = await registerAndLogin('friends.owner@example.com', 'Owner');
+    const olderFriend = await registerAndLogin('friends.older@example.com', 'Amy Friend');
+    const newerFriend = await registerAndLogin('friends.newer@example.com', 'Zoe Friend');
+
+    await makeFriends(owner.userId, olderFriend.userId);
+    await makeFriends(owner.userId, newerFriend.userId);
+
+    const [olderPairLow, olderPairHigh] = [owner.userId, olderFriend.userId].sort();
+    const [newerPairLow, newerPairHigh] = [owner.userId, newerFriend.userId].sort();
+    await Promise.all([
+      Friendship.updateOne(
+        { pairLow: olderPairLow, pairHigh: olderPairHigh },
+        { $set: { respondedAt: new Date('2024-01-01T00:00:00.000Z') } },
+      ),
+      Friendship.updateOne(
+        { pairLow: newerPairLow, pairHigh: newerPairHigh },
+        { $set: { respondedAt: new Date('2025-01-01T00:00:00.000Z') } },
+      ),
+    ]);
+
+    const recent = await request(app)
+      .get('/api/v1/friends')
+      .query({ sort: 'recent' })
+      .set('Authorization', `Bearer ${owner.token}`);
+    expect(recent.body.data.friends.map((friend) => friend.id)).toEqual([
+      newerFriend.userId,
+      olderFriend.userId,
+    ]);
+
+    const alphabetical = await request(app)
+      .get('/api/v1/friends')
+      .set('Authorization', `Bearer ${owner.token}`);
+    expect(alphabetical.body.data.friends.map((friend) => friend.id)).toEqual([
+      olderFriend.userId,
+      newerFriend.userId,
+    ]);
+  });
+
+  test('resolves custom and generated public profile slugs while enforcing friend visibility', async () => {
+    const owner = await registerAndLogin('profiles.owner@example.com', 'Profile Owner');
+    const friend = await registerAndLogin('profiles.friend@example.com', 'Public Friend');
+    const stranger = await registerAndLogin('profiles.stranger@example.com', 'Profile Stranger');
+    await makeFriends(owner.userId, friend.userId);
+
+    await User.updateOne(
+      { _id: friend.userId },
+      { $set: { 'privacy.profileVisibility': 'friends' } },
+    );
+    const friends = await request(app)
+      .get('/api/v1/friends')
+      .set('Authorization', `Bearer ${owner.token}`);
+    const friendProfile = friends.body.data.friends[0];
+    expect(friendProfile.profileSlug).toMatch(/^public-friend-[a-f0-9]{24}$/);
+
+    const generatedProfile = await request(app)
+      .get(`/api/v1/users/profile/${friendProfile.profileSlug}`)
+      .set('Authorization', `Bearer ${owner.token}`);
+    expect(generatedProfile.status).toBe(200);
+    expect(generatedProfile.body.data.user).toMatchObject({
+      id: friend.userId,
+      profileSlug: friendProfile.profileSlug,
+      name: 'Public Friend',
+      isFriend: true,
+    });
+    expect(generatedProfile.body.data.user).not.toHaveProperty('email');
+    expect(generatedProfile.body.data.user).not.toHaveProperty('phone');
+
+    const privateProfile = await request(app)
+      .get(`/api/v1/users/profile/${friendProfile.profileSlug}`)
+      .set('Authorization', `Bearer ${stranger.token}`);
+    expect(privateProfile.status).toBe(404);
+
+    await User.updateOne({ _id: friend.userId }, { $set: { username: 'public_friend' } });
+    const customProfile = await request(app)
+      .get('/api/v1/users/profile/public_friend')
+      .set('Authorization', `Bearer ${owner.token}`);
+    expect(customProfile.status).toBe(200);
+    expect(customProfile.body.data.user.profileSlug).toBe('public_friend');
+  });
+
   test('rejects friend requests and enforces the seven-day cooldown after three rejections', async () => {
     const first = await registerAndLogin('friends.sender@example.com', 'Sender');
     const second = await registerAndLogin('friends.receiver@example.com', 'Receiver');

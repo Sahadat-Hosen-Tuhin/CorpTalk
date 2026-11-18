@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import MeetingFormDialog from '../components/MeetingFormDialog.jsx';
 import { cancelMeeting, getMeetings } from '../services/meetingApi.js';
 import { createChatSocket } from '../services/chatSocket.js';
+import { notifyApp } from '../services/notificationService.js';
 
 const formatDate = (value, timezone) =>
   new Intl.DateTimeFormat(undefined, {
@@ -18,7 +19,6 @@ function MeetingsPage() {
   const [creating, setCreating] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
 
   const refresh = useCallback(async () => {
     try {
@@ -48,7 +48,7 @@ function MeetingsPage() {
   const handleSaved = async () => {
     setCreating(false);
     setEditing(null);
-    setNotice('Meeting saved. Invitees have been notified.');
+    notifyApp('Meeting saved. Invitees have been notified.', 'success');
     await refresh();
   };
 
@@ -56,19 +56,19 @@ function MeetingsPage() {
     if (!window.confirm(`Cancel “${meeting.title}”?`)) return;
     try {
       await cancelMeeting(meeting.id);
-      setNotice('Meeting cancelled.');
+      notifyApp('Meeting cancelled.', 'success');
       await refresh();
     } catch (cancelError) {
-      setError(cancelError.response?.data?.error?.message || 'Could not cancel meeting.');
+      notifyApp(cancelError.response?.data?.error?.message || 'Could not cancel meeting.', 'error');
     }
   };
 
   const copyLink = async (meeting) => {
     try {
       await navigator.clipboard.writeText(meeting.url);
-      setNotice('Meeting link copied.');
+      notifyApp('Meeting link copied.', 'success');
     } catch (copyError) {
-      setError(copyError.message || 'Could not copy the meeting link.');
+      notifyApp(copyError.message || 'Could not copy the meeting link.', 'error');
     }
   };
 
@@ -96,14 +96,6 @@ function MeetingsPage() {
         <p role="alert" className="mb-4 rounded-xl bg-error/10 px-4 py-3 text-sm text-error">
           {error}
         </p>
-      )}
-      {notice && (
-        <div className="mb-4 flex items-center justify-between rounded-xl bg-brand-primary-soft px-4 py-3 text-sm text-brand-primary-text">
-          <span>{notice}</span>
-          <button type="button" onClick={() => setNotice('')} aria-label="Dismiss notification">
-            <XCircle size={16} />
-          </button>
-        </div>
       )}
       {loading ? (
         <p className="py-12 text-center text-sm text-text-muted">Loading meetings…</p>

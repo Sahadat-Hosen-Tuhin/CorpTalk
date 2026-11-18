@@ -1,7 +1,12 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const authenticate = require('../middlewares/authenticate');
-const { uploadAvatar, validateAvatarSignature } = require('../middlewares/avatarUpload');
+const {
+  uploadAvatar,
+  uploadCoverPhoto,
+  validateAvatarSignature,
+  validateCoverPhotoSignature,
+} = require('../middlewares/avatarUpload');
 const validate = require('../middlewares/validate');
 const authController = require('../controllers/authController');
 const chatController = require('../controllers/chatController');
@@ -18,6 +23,12 @@ const userSearchLimiter = rateLimit({
 });
 
 router.get('/search', authenticate, userSearchLimiter, friendsController.searchUsers);
+router.get(
+  '/profile/:profileSlug',
+  authenticate,
+  userSearchLimiter,
+  friendsController.getPublicProfile,
+);
 router.get('/me', authenticate, authController.getProfile);
 router.patch('/me', authenticate, validate(profileSchema), authController.updateProfile);
 router.patch(
@@ -32,6 +43,13 @@ router.post(
   uploadAvatar.single('avatar'),
   validateAvatarSignature,
   authController.uploadAvatar,
+);
+router.post(
+  '/me/cover-photo',
+  authenticate,
+  uploadCoverPhoto.single('coverPhoto'),
+  validateCoverPhotoSignature,
+  authController.uploadCoverPhoto,
 );
 router.post(
   '/me/push-token',

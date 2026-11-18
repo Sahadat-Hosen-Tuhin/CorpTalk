@@ -48,6 +48,7 @@ function CallManager({ socket, user }) {
   const remoteVideoRef = useRef(null);
   const remoteAudioRef = useRef(null);
   const localVideoRef = useRef(null);
+  const fallbackRemoteStreamRef = useRef(null);
   const pendingOfferRef = useRef(null);
   const pendingCandidatesRef = useRef([]);
   const startedAtRef = useRef(null);
@@ -63,6 +64,7 @@ function CallManager({ socket, user }) {
     localStreamRef.current = null;
     setLocalStream(null);
     setRemoteStream(null);
+    fallbackRemoteStreamRef.current = null;
     pendingOfferRef.current = null;
     pendingCandidatesRef.current = [];
     startedAtRef.current = null;
@@ -99,8 +101,15 @@ function CallManager({ socket, user }) {
         peerRef.current = peer;
         stream.getTracks().forEach((track) => peer.addTrack(track, stream));
         peer.ontrack = (event) => {
-          const streamFromPeer = event.streams[0] || new MediaStream([event.track]);
-          if (streamFromPeer) setRemoteStream(streamFromPeer);
+          let streamFromPeer = event.streams[0];
+          if (!streamFromPeer) {
+            streamFromPeer = fallbackRemoteStreamRef.current || new MediaStream();
+            fallbackRemoteStreamRef.current = streamFromPeer;
+            if (!streamFromPeer.getTracks().some((track) => track.id === event.track.id)) {
+              streamFromPeer.addTrack(event.track);
+            }
+          }
+          setRemoteStream(streamFromPeer);
         };
         peer.onicecandidate = (event) => {
           if (event.candidate) {
@@ -342,9 +351,44 @@ function CallManager({ socket, user }) {
   }, [call]);
 
   useEffect(() => {
-    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStream;
-    if (remoteAudioRef.current) remoteAudioRef.current.srcObject = remoteStream;
-    if (localVideoRef.current) localVideoRef.current.srcObject = localStream;
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = remoteStream;
+      if (remoteStream) {
+        void remoteVideoRef.current.play().catch((error) => {
+          if (error.name !== 'AbortError') {
+            setCallError(
+              error.name === 'NotAllowedError'
+                ? 'Tap the call video to allow playback.'
+                : error.message || 'Could not play the remote video.',
+            );
+          }
+        });
+      }
+    }
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.srcObject = remoteStream;
+      if (remoteStream) {
+        void remoteAudioRef.current.play().catch((error) => {
+          if (error.name !== 'AbortError') {
+            setCallError(
+              error.name === 'NotAllowedError'
+                ? 'Allow audio playback in your browser to hear the call.'
+                : error.message || 'Could not play remote call audio.',
+            );
+          }
+        });
+      }
+    }
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = localStream;
+      if (localStream) {
+        void localVideoRef.current.play().catch((error) => {
+          if (error.name !== 'AbortError') {
+            setCallError(error.message || 'Could not play the local camera preview.');
+          }
+        });
+      }
+    }
   }, [remoteStream, localStream]);
 
   useEffect(() => {
@@ -447,13 +491,19 @@ function CallManager({ socket, user }) {
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950 text-white">
       {call ? (
         <div className="relative flex h-full w-full max-w-5xl flex-col items-center justify-center p-5 text-center sm:p-8">
-          {call.type === 'voice' && <audio ref={remoteAudioRef} autoPlay />}
+          <audio ref={remoteAudioRef} autoPlay />
           {call.type === 'video' && (
             <>
               <video
                 ref={remoteVideoRef}
                 autoPlay
+                muted
                 playsInline
+                onClick={() => {
+                  void remoteVideoRef.current?.play().catch((error) => {
+                    setCallError(error.message || 'Could not play the remote video.');
+                  });
+                }}
                 className="absolute inset-0 h-full w-full object-cover"
               />
               <video

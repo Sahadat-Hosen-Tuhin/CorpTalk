@@ -9,6 +9,13 @@ const toPublicUser = require('./userDto');
 const duplicateEmailError = () =>
   new AppError(409, 'EMAIL_ALREADY_REGISTERED', 'An account with this email already exists');
 
+const preserveLegacyBio = (user) => {
+  if (user.bio?.length > 160 && !user.about) {
+    user.about = user.bio;
+    user.bio = '';
+  }
+};
+
 const hashPassword = (password) => {
   const rounds = Number(process.env.BCRYPT_SALT_ROUNDS || 12);
   if (!Number.isInteger(rounds) || rounds < 10 || rounds > 14) {
@@ -144,6 +151,7 @@ const updateProfile = async (userId, updates) => {
     throw new AppError(404, 'USER_NOT_FOUND', 'User not found');
   }
 
+  preserveLegacyBio(user);
   Object.assign(user, updates);
   try {
     await user.save();
@@ -182,6 +190,18 @@ const setAvatar = async (userId, avatar, avatarPublicId) => {
   return { user: toPublicUser(user), previousPublicId };
 };
 
+const setCoverPhoto = async (userId, coverPhoto, coverPhotoPublicId) => {
+  const user = await User.findById(userId).select('+coverPhotoPublicId');
+  if (!user) {
+    throw new AppError(404, 'USER_NOT_FOUND', 'User not found');
+  }
+  const previousPublicId = user.coverPhotoPublicId;
+  user.coverPhoto = coverPhoto;
+  user.coverPhotoPublicId = coverPhotoPublicId;
+  await user.save();
+  return { user: toPublicUser(user), previousPublicId };
+};
+
 const updatePushToken = async (userId, token) => {
   const user = await User.findByIdAndUpdate(
     userId,
@@ -207,6 +227,7 @@ module.exports = {
   resetPassword,
   removePushToken,
   setAvatar,
+  setCoverPhoto,
   signup,
   updatePushToken,
   updateProfile,

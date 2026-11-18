@@ -1,6 +1,9 @@
 const authService = require('../services/authService');
 const toPublicUser = require('../services/userDto');
-const { uploadAvatar: uploadAvatarToStorage } = require('../services/avatarService');
+const {
+  uploadAvatar: uploadAvatarToStorage,
+  uploadCoverPhoto: uploadCoverPhotoToStorage,
+} = require('../services/avatarService');
 const AppError = require('../utils/AppError');
 const Friendship = require('../models/friendship');
 
@@ -132,6 +135,11 @@ const uploadAvatar = async (req, res) => {
   res.status(200).json({ data: { user } });
 };
 
+const uploadCoverPhoto = async (req, res) => {
+  const user = await uploadCoverPhotoToStorage(req.user._id, req.file);
+  res.status(200).json({ data: { user } });
+};
+
 const ensureRefreshCookie = (req, _res, next) => {
   if (!req.cookies[refreshCookieName()]) {
     next(
@@ -155,5 +163,6 @@ module.exports = {
   updateProfile,
   updatePreferences,
   uploadAvatar,
+  uploadCoverPhoto,
   verifyEmail,
 };

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Camera, Plus, Trash2, X } from 'lucide-react';
+import { Plus } from 'lucide-react';
+import StoryCard from '../features/stories/StoryCard.jsx';
+import StoryViewer from '../features/stories/StoryViewer.jsx';
 import {
   createStory,
   deleteStory,
@@ -67,14 +69,24 @@ function StoriesPage() {
     setError('');
     try {
       const viewed = await viewStory(story.id);
-      setActiveStory({ ...story, ...viewed, author: story.author });
+      const viewerCount = Array.isArray(viewed.viewers)
+        ? viewed.viewers.length
+        : story.viewerCount;
+      setActiveStory({
+        ...story,
+        ...viewed,
+        id: story.id,
+        author: story.author,
+        viewedByMe: true,
+        viewerCount,
+      });
       setStories((current) =>
         current.map((entry) =>
           entry.id === story.id
             ? {
                 ...entry,
                 viewedByMe: true,
-                viewerCount: Math.max(entry.viewerCount, story.viewerCount + 1),
+                viewerCount,
               }
             : entry,
         ),
@@ -150,33 +162,13 @@ function StoriesPage() {
         {loading ? (
           <p className="text-sm text-text-muted">Loading stories…</p>
         ) : stories.length ? (
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
             {stories.map((story) => (
-              <button
-                type="button"
+              <StoryCard
                 key={story.id}
+                story={story}
                 onClick={() => void openStory(story)}
-                className="flex items-center gap-3 rounded-2xl border border-border p-3 text-left hover:bg-bg-subtle"
-              >
-                {story.mediaType === 'image' ? (
-                  <img src={story.mediaUrl} alt="" className="h-16 w-16 rounded-xl object-cover" />
-                ) : (
-                  <span className="grid h-16 w-16 place-items-center rounded-xl bg-surface">
-                    <Camera size={24} />
-                  </span>
-                )}
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate font-semibold text-heading">
-                    {story.author.name}
-                  </span>
-                  <span className="block truncate text-sm text-text-muted">
-                    {story.caption || `${story.mediaType} story`}
-                  </span>
-                  <span className="text-xs text-text-muted">
-                    {story.viewedByMe ? 'Viewed' : 'New'} · {story.viewerCount} views
-                  </span>
-                </span>
-              </button>
+              />
             ))}
           </div>
         ) : (
@@ -184,65 +176,17 @@ function StoriesPage() {
         )}
       </div>
 
-      {myStories.length > 0 && (
-        <div className="rounded-3xl border border-border bg-bg p-5 shadow-sm">
-          <h2 className="mb-4 text-lg font-semibold text-heading">Your active stories</h2>
-          <div className="space-y-2">
-            {myStories.map((story) => (
-              <div
-                key={story.id}
-                className="flex items-center justify-between gap-3 rounded-xl bg-bg-subtle px-4 py-3"
-              >
-                <span className="truncate text-sm text-text">
-                  {story.caption || `${story.mediaType} story`} · {story.viewerCount} views
-                </span>
-                <button
-                  type="button"
-                  aria-label="Delete story"
-                  onClick={() => void removeStory(story)}
-                  className="rounded-lg p-2 text-text-muted hover:text-error"
-                >
-                  <Trash2 size={16} />
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {activeStory && (
-        <div className="fixed inset-0 z-[120] grid place-items-center bg-slate-950/90 p-4">
-          <div className="relative w-full max-w-2xl overflow-hidden rounded-2xl bg-slate-950 text-white">
-            <button
-              type="button"
-              aria-label="Close story"
-              onClick={() => setActiveStory(null)}
-              className="absolute right-3 top-3 z-10 rounded-full bg-black/50 p-2"
-            >
-              <X size={20} />
-            </button>
-            {activeStory.mediaType === 'video' ? (
-              <video
-                src={activeStory.mediaUrl}
-                controls
-                autoPlay
-                className="max-h-[75vh] w-full object-contain"
-              />
-            ) : (
-              <img
-                src={activeStory.mediaUrl}
-                alt=""
-                className="max-h-[75vh] w-full object-contain"
-              />
-            )}
-            <div className="p-4">
-              <p className="font-semibold">{activeStory.author?.name}</p>
-              {activeStory.caption && (
-                <p className="mt-1 text-sm text-slate-200">{activeStory.caption}</p>
-              )}
-            </div>
-          </div>
-        </div>
+        <StoryViewer
+          story={activeStory}
+          stories={stories}
+          error={error}
+          onOpenStory={openStory}
+          onClose={() => setActiveStory(null)}
+          onDelete={
+            myStories.some((entry) => entry.id === activeStory.id) ? removeStory : undefined
+          }
+        />
       )}
     </section>
   );

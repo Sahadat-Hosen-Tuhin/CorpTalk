@@ -161,7 +161,13 @@ Configure only the services required by the features you plan to use. The full l
 - **Cloudinary:** Set `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY` and `CLOUDINARY_API_SECRET`.
 - **Firebase push notifications:** Set the public Firebase web-app values and VAPID key in the frontend environment. Configure backend FCM credentials and `FCM_PROJECT_ID` on the server.
 - **LiveKit meetings:** Set `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` on the backend. Never expose the API secret to the frontend.
-- **TURN for calls:** The default STUN server may not establish media paths on restrictive networks. Set `CALL_TURN_URLS`, `CALL_TURN_USERNAME` and `CALL_TURN_CREDENTIAL` on the backend using values from a TURN provider. Do not put TURN credentials in `VITE_*` variables.
+- **TURN for calls:** STUN alone cannot relay media when devices are behind restrictive NATs. To run Coturn on a Linux host with a public IP:
+
+  1. Point a DNS A record for your TURN hostname at the Linux host's public IP. Copy [`infra/coturn/.env.example`](./infra/coturn/.env.example) to `infra/coturn/.env`, set `TURN_REALM` to that hostname, set `TURN_EXTERNAL_IP` to the public IPv4 address, and replace `TURN_SHARED_SECRET` with a strong random value.
+  2. Open UDP/TCP `3478` and UDP `49160-49200` in the host/cloud firewall, then start Coturn with `docker compose --env-file infra/coturn/.env -f infra/coturn/compose.yml up -d`.
+  3. Set `CALL_TURN_URLS=turn:<turn-host>:3478?transport=udp,turn:<turn-host>:3478?transport=tcp` and `CALL_TURN_SHARED_SECRET` to the same secret in the backend environment, then restart the backend.
+
+  The backend issues short-lived per-user credentials. Never expose the shared secret in `VITE_*` variables. Existing TURN providers using static credentials can continue to set `CALL_TURN_USERNAME` and `CALL_TURN_CREDENTIAL`.
 - **Redis:** Set `REDIS_URL` to enable durable meeting reminders and automatic meeting end. Without Redis, those background features are disabled.
 - **AI:** Set `AI_PROVIDER` and the matching provider API key on the backend only.
 

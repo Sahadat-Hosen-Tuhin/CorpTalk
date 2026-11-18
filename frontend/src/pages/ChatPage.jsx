@@ -1,46 +1,32 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
-  Ban,
   Bell,
-  Check,
   MessageCircle,
   MoreHorizontal,
   Phone,
   Pin,
   Plus,
   Search,
-  Send,
+  SlidersHorizontal,
   UserRound,
-  UserRoundMinus,
-  UserRoundPlus,
   Users,
   Video,
   X,
 } from 'lucide-react';
-import { formatDistanceToNow } from 'date-fns';
+import { format, formatDistanceToNow, isSameDay } from 'date-fns';
 import ChatComposer from '../features/chat/ChatComposer.jsx';
 import MessageBubble from '../features/chat/MessageBubble.jsx';
 import CreateGroupDialog from '../components/CreateGroupDialog.jsx';
 import GroupInfoDialog from '../components/GroupInfoDialog.jsx';
 import {
-  createDirectConversation,
-  acceptFriendRequest,
-  blockFriend,
-  cancelFriendRequest,
   deleteMessage,
   getConversations,
-  getBlockedUsers,
-  getFriendRequests,
   getFriends,
   getMessages,
   getPinnedMessages,
   getStarredMessages,
-  rejectFriendRequest,
-  removeFriend,
-  searchUsers,
-  sendFriendRequest,
   sendMessageFile,
   editMessage,
   forwardMessage,
@@ -50,7 +36,6 @@ import {
   reportUser,
   searchMessages,
   toggleStarMessage,
-  unblockFriend,
 } from '../services/chatApi.js';
 import { emitChatEvent, createChatSocket } from '../services/chatSocket.js';
 import { apiClient, getAccessToken } from '../services/apiClient.js';
@@ -65,17 +50,12 @@ const sortMessages = (messages) =>
 
 function ChatPage() {
   const { conversationId: routeConversationId } = useParams();
-  const [searchParams] = useSearchParams();
   const user = useAuthStore((state) => state.user);
   const [conversations, setConversations] = useState([]);
   const [friends, setFriends] = useState([]);
-  const [friendRequests, setFriendRequests] = useState({ incoming: [], outgoing: [] });
-  const [blockedUsers, setBlockedUsers] = useState([]);
-  const [searchResults, setSearchResults] = useState([]);
-  const [friendsTab, setFriendsTab] = useState(
-    searchParams.get('tab') === 'requests' ? 'requests' : 'friends',
-  );
   const [search, setSearch] = useState('');
+  const [conversationFilter, setConversationFilter] = useState('all');
+  const [unreadOnly, setUnreadOnly] = useState(false);
   const [selectedId, setSelectedId] = useState(routeConversationId || '');
   const [messages, setMessages] = useState([]);
   const [loadingList, setLoadingList] = useState(true);
@@ -100,7 +80,6 @@ function ChatPage() {
   const scrollRef = useRef(null);
   const socketRef = useRef(null);
   const selectedIdRef = useRef(selectedId);
-  const searchRef = useRef(search);
   const retryActionsRef = useRef(new Map());
   const previewUrlsRef = useRef(new Map());
   const loadingOlderRef = useRef(false);
@@ -110,9 +89,6 @@ function ChatPage() {
   useEffect(() => {
     selectedIdRef.current = selectedId;
   }, [selectedId]);
-  useEffect(() => {
-    searchRef.current = search;
-  }, [search]);
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === selectedId),
     [conversations, selectedId],
@@ -124,49 +100,46 @@ function ChatPage() {
   }, [activeConversation]);
   const filteredConversations = useMemo(() => {
     const query = search.trim().toLowerCase();
-    if (!query) return conversations;
-    return conversations.filter(
-      (conversation) =>
+    return conversations.filter((conversation) => {
+      if (conversationFilter === 'direct' && conversation.type !== 'direct') return false;
+      if (conversationFilter === 'groups' && conversation.type !== 'group') return false;
+      if (unreadOnly && !conversation.unreadCount) return false;
+      if (!query) return true;
+      return (
         conversation.participant.name.toLowerCase().includes(query) ||
         conversation.participant.username?.toLowerCase().includes(query) ||
-        conversation.lastMessage?.preview?.toLowerCase().includes(query),
-    );
-  }, [conversations, search]);
-  const filteredFriends = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    if (!query) return friends;
-    return friends.filter(
-      (friend) =>
-        friend.name.toLowerCase().includes(query) || friend.username?.toLowerCase().includes(query),
-    );
-  }, [friends, search]);
-
+        conversation.lastMessage?.preview?.toLowerCase().includes(query)
+      );
+    });
+  }, [conversationFilter, conversations, search, unreadOnly]);
+  const directConversationCount = conversations.filter(
+    (conversation) => conversation.type === 'direct',
+  ).length;
+  const groupConversationCount = conversations.filter(
+    (conversation) => conversation.type === 'group',
+  ).length;
   const refreshLists = useCallback(async () => {
-    const [conversationList, friendList, requests, blocked] = await Promise.all([
-      getConversations(),
-      getFriends(),
-      getFriendRequests(),
-      getBlockedUsers(),
-    ]);
-    setConversations(conversationList);
-    setFriends(friendList);
-    setFriendRequests(requests);
-    setBlockedUsers(blocked);
+    setConversations(await getConversations());
   }, []);
 
-  const refreshSearchResults = useCallback(async () => {
-    const query = searchRef.current.trim().replace(/^@/, '');
-    if (!/^[a-z0-9_]{3,20}$/i.test(query)) {
-      setSearchResults([]);
-      return;
-    }
-    setSearchResults(await searchUsers(query));
-  }, []);
+  useEffect(() => {
+    if (!createGroupOpen && !groupInfoOpen) return undefined;
+    let active = true;
+    getFriends()
+      .then((friendList) => {
+        if (active) setFriends(friendList);
+      })
+      .catch((requestError) => {
+        if (active) setError(requestError.response?.data?.error?.message || requestError.message);
+      });
+    return () => {
+      active = false;
+    };
+  }, [createGroupOpen, groupInfoOpen]);
 
   const handlePresence = ({ userId, online, lastSeen }) => {
     const updatePresence = (person) =>
       person.id === userId ? { ...person, isOnline: online, lastSeen } : person;
-    setFriends((current) => current.map(updatePresence));
     setConversations((current) =>
       current.map((conversation) => ({
         ...conversation,
@@ -191,58 +164,32 @@ function ChatPage() {
     }
   }, []);
 
-  const performFriendAction = async (action, refreshSearch = false) => {
-    setError('');
-    try {
-      await action();
-      await refreshLists();
-      if (refreshSearch) await refreshSearchResults();
-    } catch (requestError) {
-      setError(requestError.response?.data?.error?.message || requestError.message);
-    }
-  };
-
-  useEffect(() => {
-    const query = search.trim().replace(/^@/, '');
-    if (friendsTab !== 'friends' || !/^[a-z0-9_]{3,20}$/i.test(query)) {
-      setSearchResults([]);
-      return undefined;
-    }
-    let active = true;
-    const timeout = setTimeout(() => {
-      searchUsers(query)
-        .then((users) => {
-          if (active) setSearchResults(users);
-        })
-        .catch((requestError) => {
-          if (active) setError(requestError.response?.data?.error?.message || requestError.message);
-        });
-    }, 250);
-    return () => {
-      active = false;
-      clearTimeout(timeout);
-    };
-  }, [friendsTab, search]);
-
   useEffect(() => {
     let active = true;
-    Promise.all([getConversations(), getFriends(), getFriendRequests(), getBlockedUsers()])
-      .then(([conversationList, friendList, requests, blocked]) => {
+    getConversations()
+      .then((conversationList) => {
         if (!active) return;
         setConversations(conversationList);
-        setFriends(friendList);
-        setFriendRequests(requests);
-        setBlockedUsers(blocked);
         if (routeConversationId) {
           setMessages([]);
           setLoadingMessages(true);
           stickToBottomRef.current = true;
           setSelectedId(routeConversationId);
-        } else if (conversationList[0]) {
+        } else {
+          if (selectedIdRef.current && socketRef.current?.connected) {
+            socketRef.current.emit('chat:leave', {
+              conversationId: selectedIdRef.current,
+            });
+          }
+          selectedIdRef.current = '';
+          setSelectedId('');
           setMessages([]);
-          setLoadingMessages(true);
-          stickToBottomRef.current = true;
-          setSelectedId(conversationList[0].id);
+          setPinnedMessages([]);
+          setHasMore(false);
+          setNextCursor(null);
+          setTypingUsers([]);
+          setLoadingMessages(false);
+          setSidebarVisible(true);
         }
       })
       .catch((requestError) => {
@@ -269,7 +216,6 @@ function ChatPage() {
 
     const refresh = () => {
       void refreshLists().catch((requestError) => setError(requestError.message));
-      void refreshSearchResults().catch((requestError) => setError(requestError.message));
     };
 
     const handleConnect = () => {
@@ -415,7 +361,6 @@ function ChatPage() {
     socket.on('typing:stop', handleTypingStop);
     socket.on('group:removed', handleGroupRemoved);
     socket.on('presence:update', handlePresence);
-    socket.on('friend:request', refresh);
     socket.on('friend:accepted', refresh);
     socket.on('friend:removed', refresh);
     window.addEventListener('corptalk:auth-refreshed', refreshSocketAuth);
@@ -431,7 +376,7 @@ function ChatPage() {
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [refreshLists, refreshSearchResults, user.id]);
+  }, [refreshLists, user.id]);
 
   useEffect(() => {
     if (!selectedId) return undefined;
@@ -486,26 +431,6 @@ function ChatPage() {
     });
     return () => cancelAnimationFrame(frame);
   }, [messages]);
-
-  const selectFriend = async (friend) => {
-    setError('');
-    try {
-      const conversation = await createDirectConversation(friend.id);
-      await refreshLists();
-      stopTyping();
-      if (selectedIdRef.current && socketRef.current?.connected) {
-        socketRef.current.emit('chat:leave', { conversationId: selectedIdRef.current });
-      }
-      setTypingUsers([]);
-      setMessages([]);
-      setLoadingMessages(true);
-      stickToBottomRef.current = true;
-      setSelectedId(conversation.id);
-      setSidebarVisible(false);
-    } catch (requestError) {
-      setError(requestError.response?.data?.error?.message || requestError.message);
-    }
-  };
 
   const selectConversation = (conversationId) => {
     stopTyping();
@@ -826,381 +751,160 @@ function ChatPage() {
   };
 
   return (
-    <section className="flex h-[calc(100vh-11rem)] min-h-[34rem] overflow-hidden rounded-3xl border border-border bg-bg shadow-sm">
+    <section className="flex h-[calc(100dvh-7.5rem)] min-h-[30rem] w-full overflow-hidden rounded-2xl border border-border bg-bg shadow-sm">
       <aside
-        className={`w-full shrink-0 border-r border-border bg-bg sm:w-80 ${
-          sidebarVisible || !selectedId ? 'block' : 'hidden sm:block'
+        className={`flex w-full min-h-0 shrink-0 flex-col border-r border-border bg-bg sm:w-[18.25rem] ${
+          sidebarVisible || !selectedId ? 'flex' : 'hidden sm:flex'
         }`}
       >
-        <div className="border-b border-border p-5">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand-primary-text">
-                Messages
-              </p>
-              <h1 className="mt-1 text-2xl font-semibold text-heading">Chats</h1>
-            </div>
-            <div className="flex items-center">
+        <div className="border-b border-border p-4">
+          <div className="flex items-center justify-between gap-2">
+            <h1 className="text-2xl font-bold tracking-tight text-heading">Chats</h1>
+            <div className="flex shrink-0 items-center gap-1">
+              <Link
+                to="/friends"
+                title="Start a new chat"
+                aria-label="Start a new chat"
+                className="inline-flex items-center gap-1 rounded-xl bg-brand-primary px-2.5 py-2 text-xs font-semibold text-on-primary transition hover:bg-brand-primary-hover"
+              >
+                <Plus size={15} />
+                New Chat
+              </Link>
               <button
                 type="button"
                 onClick={() => setCreateGroupOpen(true)}
                 title="Create a group"
                 aria-label="Create a group"
-                className="rounded-full p-2 text-text-muted hover:bg-surface hover:text-heading"
+                className="grid h-9 w-9 place-items-center rounded-xl bg-bg-subtle text-text-muted transition hover:bg-brand-primary-soft hover:text-brand-primary-text"
               >
-                <Plus size={19} />
+                <Users size={17} />
               </button>
               <button
                 type="button"
                 onClick={handleEnableNotifications}
                 title="Enable offline notifications"
                 aria-label="Enable offline notifications"
-                className="rounded-full p-2 text-text-muted hover:bg-surface hover:text-heading"
+                className="grid h-9 w-9 place-items-center rounded-xl bg-bg-subtle text-text-muted transition hover:bg-brand-primary-soft hover:text-brand-primary-text"
               >
-                <Bell size={19} className={notificationsEnabled ? 'text-brand-primary' : ''} />
+                <Bell size={17} className={notificationsEnabled ? 'text-brand-primary-text' : ''} />
               </button>
             </div>
           </div>
-          <label className="mt-4 flex items-center gap-2 rounded-xl border border-border bg-bg-subtle px-3 py-2.5">
-            <Search size={17} className="text-text-muted" />
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              className="min-w-0 flex-1 bg-transparent text-sm outline-none"
-              placeholder="Search chats, friends, or @username"
-              aria-label="Search chats, friends, or username"
-            />
-          </label>
-          <div className="mt-3 flex items-center gap-2 text-xs text-text-muted">
+
+          <div className="mt-4 flex items-center gap-2">
+            <label className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-border bg-bg-subtle px-3 py-2.5 transition focus-within:border-brand-primary focus-within:ring-4 focus-within:ring-brand-primary/10">
+              <Search size={17} className="shrink-0 text-text-muted" />
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                className="min-w-0 flex-1 bg-transparent text-sm text-text outline-none"
+                placeholder="Search chats..."
+                aria-label="Search chats"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => setUnreadOnly((current) => !current)}
+              aria-label={unreadOnly ? 'Show all chats' : 'Show unread chats only'}
+              aria-pressed={unreadOnly}
+              title={unreadOnly ? 'Show all chats' : 'Filter unread chats'}
+              className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl border transition ${
+                unreadOnly
+                  ? 'border-brand-primary bg-brand-primary-soft text-brand-primary-text'
+                  : 'border-border bg-bg-subtle text-text-muted hover:bg-surface hover:text-heading'
+              }`}
+            >
+              <SlidersHorizontal size={17} />
+            </button>
+          </div>
+
+          <div className="mt-4 flex items-center gap-1.5" role="tablist" aria-label="Chat filters">
+            {[
+              { id: 'all', label: 'All', count: conversations.length },
+              { id: 'direct', label: 'Direct', count: directConversationCount },
+              { id: 'groups', label: 'Groups', count: groupConversationCount },
+            ].map((filter) => (
+              <button
+                key={filter.id}
+                type="button"
+                role="tab"
+                aria-selected={conversationFilter === filter.id}
+                onClick={() => setConversationFilter(filter.id)}
+                className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                  conversationFilter === filter.id
+                    ? 'bg-brand-primary text-on-primary shadow-sm'
+                    : 'bg-bg-subtle text-text-muted hover:bg-surface hover:text-heading'
+                }`}
+              >
+                {filter.label} <span className="opacity-75">{filter.count}</span>
+              </button>
+            ))}
+          </div>
+          <div className="mt-3 flex items-center gap-2 text-[11px] text-text-muted">
             <span
               className={`h-2 w-2 rounded-full ${socketConnected ? 'bg-success' : 'bg-warning'}`}
             />
             {socketConnected ? 'Live connection' : 'Connecting…'}
           </div>
         </div>
-        <div className="h-[calc(100%-8.7rem)] overflow-y-auto">
-          <h2 className="px-5 pb-2 pt-4 text-xs font-semibold uppercase tracking-wider text-text-muted">
-            Conversations
-          </h2>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-2">
           {loadingList ? (
-            <p className="px-5 py-4 text-sm text-text-muted">Loading chats…</p>
+            <p className="px-3 py-4 text-sm text-text-muted">Loading chats…</p>
           ) : filteredConversations.length ? (
-            filteredConversations.map((conversation) => (
-              <button
-                type="button"
-                key={conversation.id}
-                onClick={() => selectConversation(conversation.id)}
-                className={`flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-bg-subtle ${
-                  selectedId === conversation.id ? 'bg-brand-primary-soft' : ''
-                }`}
-              >
-                <Avatar user={conversation.participant} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-sm font-semibold text-heading">
-                      {conversation.participant.name}
-                    </span>
-                    <span className="shrink-0 text-[10px] text-text-muted">
-                      {conversation.lastMessage?.sentAt
-                        ? formatDistanceToNow(new Date(conversation.lastMessage.sentAt), {
-                            addSuffix: false,
-                          })
-                        : ''}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    aria-label="Search messages in this chat"
-                    onClick={() => {
-                      setMessageSearchOpen((current) => !current);
-                      setMessageSearchResults([]);
-                    }}
-                    className="rounded-full p-2 text-text-muted hover:bg-surface hover:text-heading"
-                  >
-                    <Search size={19} />
-                  </button>
-                  <div className="mt-1 flex items-center justify-between gap-2">
-                    <span className="truncate text-xs text-text-muted">
-                      {conversation.lastMessage?.preview || 'Start a conversation'}
-                    </span>
-                    {conversation.unreadCount > 0 && (
-                      <span className="rounded-full bg-brand-primary px-2 py-0.5 text-[10px] font-semibold text-on-primary">
-                        {conversation.unreadCount}
+            filteredConversations.map((conversation) => {
+              const sentAt = conversation.lastMessage?.sentAt
+                ? new Date(conversation.lastMessage.sentAt)
+                : null;
+              const timestamp = sentAt
+                ? isSameDay(sentAt, new Date())
+                  ? format(sentAt, 'p')
+                  : formatDistanceToNow(sentAt, { addSuffix: false })
+                : '';
+
+              return (
+                <button
+                  type="button"
+                  key={conversation.id}
+                  onClick={() => selectConversation(conversation.id)}
+                  className={`mb-1.5 flex w-full items-center gap-3 rounded-2xl border px-3 py-3 text-left transition ${
+                    selectedId === conversation.id
+                      ? 'border-brand-primary/20 bg-brand-primary-soft'
+                      : 'border-transparent hover:bg-bg-subtle'
+                  }`}
+                >
+                  <Avatar user={conversation.participant} large />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center justify-between gap-2">
+                      <span className="truncate text-sm font-semibold text-heading">
+                        {conversation.participant.name}
                       </span>
-                    )}
-                  </div>
-                </div>
-              </button>
-            ))
-          ) : (
-            <p className="px-5 py-3 text-sm text-text-muted">No conversations yet.</p>
-          )}
-          <div
-            className="mt-4 flex border-b border-border px-3"
-            role="tablist"
-            aria-label="Friends"
-          >
-            {['friends', 'requests'].map((tab) => (
-              <button
-                type="button"
-                key={tab}
-                role="tab"
-                aria-selected={friendsTab === tab}
-                onClick={() => setFriendsTab(tab)}
-                className={`flex-1 border-b-2 px-2 py-2 text-sm font-medium capitalize ${
-                  friendsTab === tab
-                    ? 'border-brand-primary text-brand-primary-text'
-                    : 'border-transparent text-text-muted hover:text-heading'
-                }`}
-              >
-                {tab}
-                {tab === 'requests' && friendRequests.incoming.length > 0 && (
-                  <span className="ml-1 rounded-full bg-brand-primary px-1.5 py-0.5 text-[10px] text-on-primary">
-                    {friendRequests.incoming.length}
+                      <span className="shrink-0 text-[10px] text-text-muted">{timestamp}</span>
+                    </span>
+                    <span className="mt-1 flex items-center justify-between gap-2">
+                      <span className="truncate text-xs text-text-muted">
+                        {conversation.lastMessage?.preview || 'Start a conversation'}
+                      </span>
+                      {conversation.unreadCount > 0 && (
+                        <span className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-brand-primary px-1.5 text-[10px] font-bold text-on-primary">
+                          {conversation.unreadCount}
+                        </span>
+                      )}
+                    </span>
                   </span>
-                )}
-              </button>
-            ))}
-          </div>
-          {friendsTab === 'friends' ? (
-            <>
-              {search && /^[a-z0-9_@]{3,21}$/i.test(search.trim()) && (
-                <section aria-label="Username search results">
-                  <h2 className="px-5 pb-2 pt-4 text-xs font-semibold uppercase tracking-wider text-text-muted">
-                    Find by username
-                  </h2>
-                  {searchResults.length ? (
-                    searchResults.map((person) => {
-                      const relationship = person.relationship;
-                      const cooldownActive =
-                        relationship?.cooldownUntil &&
-                        new Date(relationship.cooldownUntil) > new Date();
-                      return (
-                        <div
-                          key={person.id}
-                          className="flex items-center gap-3 px-4 py-3 hover:bg-bg-subtle"
-                        >
-                          <Avatar user={person} />
-                          <span className="min-w-0 flex-1 truncate text-sm font-medium text-heading">
-                            {person.name}
-                            <span className="block truncate text-xs font-normal text-text-muted">
-                              @{person.username}
-                            </span>
-                          </span>
-                          {relationship?.status === 'accepted' ? (
-                            <span className="text-xs text-text-muted">Friends</span>
-                          ) : relationship?.status === 'pending' &&
-                            relationship.direction === 'outgoing' ? (
-                            <span className="text-xs text-text-muted">Sent</span>
-                          ) : relationship?.status === 'pending' ? (
-                            <button
-                              type="button"
-                              className="rounded-lg bg-brand-primary px-2 py-1 text-xs text-on-primary"
-                              onClick={() =>
-                                void performFriendAction(
-                                  () => acceptFriendRequest(relationship.requestId),
-                                  true,
-                                )
-                              }
-                            >
-                              Accept
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              aria-label={`Add ${person.name}`}
-                              title={
-                                cooldownActive
-                                  ? 'Friend requests are temporarily limited'
-                                  : 'Add friend'
-                              }
-                              disabled={Boolean(cooldownActive)}
-                              className="rounded-lg p-2 text-brand-primary-text hover:bg-brand-primary-soft disabled:opacity-40"
-                              onClick={() =>
-                                void performFriendAction(() => sendFriendRequest(person.id), true)
-                              }
-                            >
-                              <UserRoundPlus size={17} />
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            aria-label={`Block ${person.name}`}
-                            title="Block"
-                            onClick={() =>
-                              window.confirm(`Block ${person.name}?`) &&
-                              void performFriendAction(() => blockFriend(person.id), true)
-                            }
-                            className="rounded-lg p-2 text-text-muted hover:bg-surface hover:text-error"
-                          >
-                            <Ban size={16} />
-                          </button>
-                        </div>
-                      );
-                    })
-                  ) : (
-                    <p className="px-5 py-2 text-sm text-text-muted">
-                      No available user found. Search their exact username.
-                    </p>
-                  )}
-                </section>
-              )}
-              <h2 className="px-5 pb-2 pt-4 text-xs font-semibold uppercase tracking-wider text-text-muted">
-                Friends
-              </h2>
-              {filteredFriends.length ? (
-                filteredFriends.map((friend) => (
-                  <div
-                    key={friend.id}
-                    className="flex items-center gap-3 px-4 py-3 hover:bg-bg-subtle"
-                  >
-                    <Avatar user={friend} />
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-heading">
-                      {friend.name}
-                      {friend.username && (
-                        <span className="block truncate text-xs font-normal text-text-muted">
-                          @{friend.username}
-                        </span>
-                      )}
-                    </span>
-                    <button
-                      type="button"
-                      aria-label={`Chat with ${friend.name}`}
-                      title="Message"
-                      onClick={() => void selectFriend(friend)}
-                      className="rounded-lg p-2 text-text-muted hover:bg-brand-primary-soft hover:text-brand-primary-text"
-                    >
-                      <Send size={15} />
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={`Unfriend ${friend.name}`}
-                      title="Unfriend"
-                      onClick={() =>
-                        window.confirm(`Remove ${friend.name} from your friends?`) &&
-                        void performFriendAction(() => removeFriend(friend.id))
-                      }
-                      className="rounded-lg p-2 text-text-muted hover:bg-surface hover:text-error"
-                    >
-                      <UserRoundMinus size={15} />
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={`Block ${friend.name}`}
-                      title="Block"
-                      onClick={() =>
-                        window.confirm(`Block ${friend.name}? This also removes the friendship.`) &&
-                        void performFriendAction(() => blockFriend(friend.id))
-                      }
-                      className="rounded-lg p-2 text-text-muted hover:bg-surface hover:text-error"
-                    >
-                      <Ban size={15} />
-                    </button>
-                  </div>
-                ))
-              ) : (
-                <p className="px-5 py-3 text-sm text-text-muted">
-                  No accepted friends yet. Search for a username to add a friend.
-                </p>
-              )}
-            </>
+                </button>
+              );
+            })
           ) : (
-            <section aria-label="Friend requests" className="pb-4">
-              <h2 className="px-5 pb-2 pt-4 text-xs font-semibold uppercase tracking-wider text-text-muted">
-                Incoming
-              </h2>
-              {friendRequests.incoming.length ? (
-                friendRequests.incoming.map((request) => (
-                  <div key={request.id} className="flex items-center gap-3 px-4 py-3">
-                    <Avatar user={request.user} />
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-heading">
-                      {request.user.name}
-                      <span className="block truncate text-xs font-normal text-text-muted">
-                        @{request.user.username}
-                      </span>
-                    </span>
-                    <button
-                      type="button"
-                      aria-label={`Accept ${request.user.name}`}
-                      title="Accept"
-                      onClick={() =>
-                        void performFriendAction(() => acceptFriendRequest(request.id))
-                      }
-                      className="rounded-lg p-2 text-success hover:bg-surface"
-                    >
-                      <Check size={17} />
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={`Reject ${request.user.name}`}
-                      title="Reject"
-                      onClick={() =>
-                        void performFriendAction(() => rejectFriendRequest(request.id))
-                      }
-                      className="rounded-lg p-2 text-error hover:bg-surface"
-                    >
-                      <X size={17} />
-                    </button>
-                  </div>
-                ))
-              ) : (
-                <p className="px-5 py-2 text-sm text-text-muted">No incoming requests.</p>
-              )}
-              <h2 className="px-5 pb-2 pt-5 text-xs font-semibold uppercase tracking-wider text-text-muted">
-                Sent
-              </h2>
-              {friendRequests.outgoing.length ? (
-                friendRequests.outgoing.map((request) => (
-                  <div key={request.id} className="flex items-center gap-3 px-4 py-3">
-                    <Avatar user={request.user} />
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-heading">
-                      {request.user.name}
-                      <span className="block truncate text-xs font-normal text-text-muted">
-                        @{request.user.username}
-                      </span>
-                    </span>
-                    <button
-                      type="button"
-                      className="rounded-lg px-2 py-1 text-xs text-text-muted hover:bg-surface"
-                      onClick={() =>
-                        void performFriendAction(() => cancelFriendRequest(request.id))
-                      }
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                ))
-              ) : (
-                <p className="px-5 py-2 text-sm text-text-muted">No sent requests.</p>
-              )}
-              <h2 className="px-5 pb-2 pt-5 text-xs font-semibold uppercase tracking-wider text-text-muted">
-                Blocked
-              </h2>
-              {blockedUsers.length ? (
-                blockedUsers.map((blocked) => (
-                  <div key={blocked.id} className="flex items-center gap-3 px-4 py-3">
-                    <Avatar user={blocked} />
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-heading">
-                      {blocked.name}
-                      {blocked.username && (
-                        <span className="block truncate text-xs font-normal text-text-muted">
-                          @{blocked.username}
-                        </span>
-                      )}
-                    </span>
-                    <button
-                      type="button"
-                      className="rounded-lg px-2 py-1 text-xs text-text-muted hover:bg-surface"
-                      onClick={() => void performFriendAction(() => unblockFriend(blocked.id))}
-                    >
-                      Unblock
-                    </button>
-                  </div>
-                ))
-              ) : (
-                <p className="px-5 py-2 text-sm text-text-muted">No blocked users.</p>
-              )}
-            </section>
+            <div className="px-3 py-8 text-center">
+              <MessageCircle size={24} className="mx-auto text-text-muted" />
+              <p className="mt-2 text-sm font-medium text-heading">
+                {unreadOnly ? 'No unread chats' : 'No conversations found'}
+              </p>
+              <p className="mt-1 text-xs text-text-muted">
+                {search ? 'Try another search.' : 'Start a chat with one of your friends.'}
+              </p>
+            </div>
           )}
         </div>
       </aside>
@@ -1208,7 +912,7 @@ function ChatPage() {
       <div className={`min-w-0 flex-1 flex-col ${sidebarVisible ? 'hidden sm:flex' : 'flex'}`}>
         {activeConversation ? (
           <>
-            <header className="flex items-center gap-3 border-b border-border px-4 py-3 sm:px-6">
+            <header className="flex items-center gap-3 border-b border-border bg-bg px-3 py-3 sm:px-5">
               <button
                 type="button"
                 className="rounded-full p-2 text-text-muted hover:bg-surface sm:hidden"
@@ -1237,7 +941,7 @@ function ChatPage() {
               {activeConversation.type === 'group' ? (
                 <button
                   type="button"
-                  className="rounded-full p-2 text-text-muted hover:bg-surface hover:text-brand-primary-text"
+                  className="rounded-xl p-2 text-text-muted transition hover:bg-brand-primary-soft hover:text-brand-primary-text"
                   aria-label="Group information and settings"
                   onClick={() => setGroupInfoOpen(true)}
                 >
@@ -1248,7 +952,7 @@ function ChatPage() {
                   <>
                     <button
                       type="button"
-                      className="rounded-full p-2 text-text-muted hover:bg-surface hover:text-brand-primary-text"
+                      className="rounded-xl p-2 text-text-muted transition hover:bg-brand-primary-soft hover:text-brand-primary-text"
                       aria-label="Start voice call"
                       onClick={() =>
                         window.dispatchEvent(
@@ -1266,7 +970,7 @@ function ChatPage() {
                     </button>
                     <button
                       type="button"
-                      className="rounded-full p-2 text-text-muted hover:bg-surface hover:text-brand-primary-text"
+                      className="rounded-xl p-2 text-text-muted transition hover:bg-brand-primary-soft hover:text-brand-primary-text"
                       aria-label="Start video call"
                       onClick={() =>
                         window.dispatchEvent(
@@ -1285,10 +989,26 @@ function ChatPage() {
                   </>
                 )
               )}
+              <button
+                type="button"
+                className={`rounded-xl p-2 transition ${
+                  messageSearchOpen
+                    ? 'bg-brand-primary-soft text-brand-primary-text'
+                    : 'text-text-muted hover:bg-brand-primary-soft hover:text-brand-primary-text'
+                }`}
+                aria-label="Search messages in this chat"
+                title="Search messages"
+                onClick={() => {
+                  setMessageSearchOpen((current) => !current);
+                  setMessageSearchResults([]);
+                }}
+              >
+                <Search size={19} />
+              </button>
               {activeConversation.type !== 'group' && (
                 <button
                   type="button"
-                  className="rounded-full p-2 text-text-muted hover:bg-surface"
+                  className="rounded-xl p-2 text-text-muted transition hover:bg-brand-primary-soft hover:text-brand-primary-text"
                   aria-label="Conversation options"
                   onClick={() => setError('Conversation details are not available yet.')}
                 >
@@ -1402,7 +1122,7 @@ function ChatPage() {
                   element.scrollHeight - element.scrollTop - element.clientHeight < 100;
                 if (event.currentTarget.scrollTop < 50) void loadOlderMessages();
               }}
-              className="flex-1 overflow-y-auto px-4 py-4 sm:px-6"
+              className="chat-message-canvas min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6"
             >
               {hasMore && (
                 <button
@@ -1488,8 +1208,11 @@ function ChatPage() {
             </div>
             <h2 className="mt-4 text-xl font-semibold text-heading">Your messages</h2>
             <p className="mt-2 max-w-sm text-sm leading-6 text-text-muted">
-              Choose a conversation or an accepted friend. The friend request flow is part of Phase
-              1.5.
+              Choose a conversation, or visit{' '}
+              <Link to="/friends" className="font-semibold text-brand-primary-text hover:underline">
+                Friends
+              </Link>{' '}
+              to open a friend’s profile and start a chat.
             </p>
           </div>
         )}

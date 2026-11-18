@@ -3,9 +3,11 @@ const Block = require('../models/block');
 const Friendship = require('../models/friendship');
 const User = require('../models/user');
 const AppError = require('../utils/AppError');
+const profileSlugFor = require('../utils/profileSlug');
 const chatService = require('./chatService');
 
 const userProjection = 'name username avatar isOnline lastSeen privacy';
+const publicProfileProjection = 'name username avatar coverPhoto bio about privacy createdAt';
 const friendError = () =>
   new AppError(404, 'FRIENDSHIP_NOT_FOUND', 'Friend or friend request not found');
 
@@ -27,6 +29,7 @@ const publicUser = (user, isFriend = false) => ({
   id: user._id.toString(),
   name: user.name,
   username: user.username || null,
+  profileSlug: profileSlugFor(user),
   avatar: user.avatar,
   isOnline: user.privacy?.showOnlineStatus === false ? false : Boolean(user.isOnline),
   lastSeen:
@@ -85,17 +88,67 @@ const searchUsers = async (userId, username) => {
   return results;
 };
 
-const listFriends = async (userId, search = '') => {
+const getPublicProfile = async (viewerId, profileSlug) => {
+  const normalizedSlug = profileSlug.toLowerCase();
+  let user = await User.findOne({ username: normalizedSlug, isVerified: true })
+    .select(publicProfileProjection)
+    .lean();
+
+  if (!user) {
+    const generatedId = normalizedSlug.match(/-([a-f0-9]{24})$/)?.[1];
+    if (generatedId) {
+      user = await User.findOne({ _id: generatedId, isVerified: true })
+        .select(publicProfileProjection)
+        .lean();
+      if (user && profileSlugFor(user) !== normalizedSlug) user = null;
+    }
+  }
+  if (!user) throw new AppError(404, 'USER_NOT_FOUND', 'Profile not found');
+
+  const isSelf = viewerId.toString() === user._id.toString();
+  let isFriend = false;
+  if (!isSelf) {
+    await ensureNotBlocked(viewerId, user._id);
+    const [pairLow, pairHigh] = pairFor(viewerId, user._id);
+    isFriend = Boolean(await Friendship.exists({ pairLow, pairHigh, status: 'accepted' }));
+  }
+  if (!isSelf && user.privacy?.profileVisibility === 'friends' && !isFriend) {
+    throw new AppError(404, 'USER_NOT_FOUND', 'Profile not found');
+  }
+
+  const legacyAbout = user.bio?.length > 160 && !user.about ? user.bio : '';
+  return {
+    id: user._id.toString(),
+    name: user.name,
+    username: user.username || null,
+    profileSlug: profileSlugFor(user),
+    avatar: user.avatar,
+    coverPhoto: user.coverPhoto,
+    bio: legacyAbout ? '' : user.bio,
+    about: user.about || legacyAbout,
+    createdAt: user.createdAt,
+    isFriend,
+  };
+};
+
+const listFriends = async (userId, search = '', sort = 'name') => {
   const records = await Friendship.find({
     status: 'accepted',
     $or: [{ requester: userId }, { recipient: userId }],
   })
-    .select('requester recipient')
+    .select('requester recipient respondedAt createdAt')
     .lean();
   const ids = records.map((record) =>
     record.requester.toString() === userId.toString() ? record.recipient : record.requester,
   );
   if (!ids.length) return [];
+  const friendshipByFriendId = new Map(
+    records.map((record) => {
+      const friendId =
+        record.requester.toString() === userId.toString() ? record.recipient : record.requester;
+      return [friendId.toString(), record];
+    }),
+  );
   const blocks = await Block.find({
     $or: [
       { blocker: userId, blocked: { $in: ids } },
@@ -116,7 +169,19 @@ const listFriends = async (userId, search = '') => {
     : null;
   const filter = { _id: { $in: ids.filter((id) => !blockedIds.has(id.toString())) } };
   if (searchPattern) filter.$or = [{ name: searchPattern }, { username: searchPattern }];
-  const users = await User.find(filter).select(userProjection).sort({ name: 1 }).lean();
+  let userQuery = User.find(filter).select(userProjection);
+  if (sort !== 'recent') userQuery = userQuery.sort({ name: 1 });
+  const users = await userQuery.lean();
+  if (sort === 'recent') {
+    users.sort((first, second) => {
+      const firstFriendship = friendshipByFriendId.get(first._id.toString());
+      const secondFriendship = friendshipByFriendId.get(second._id.toString());
+      const firstAcceptedAt = firstFriendship?.respondedAt || firstFriendship?.createdAt || 0;
+      const secondAcceptedAt = secondFriendship?.respondedAt || secondFriendship?.createdAt || 0;
+      const recency = new Date(secondAcceptedAt).getTime() - new Date(firstAcceptedAt).getTime();
+      return recency || first.name.localeCompare(second.name);
+    });
+  }
   return users.map((user) => publicUser(user, true));
 };
 
@@ -312,6 +377,7 @@ module.exports = {
   acceptRequest,
   blockUser,
   cancelRequest,
+  getPublicProfile,
   listFriends,
   listBlocked,
   listRequests,

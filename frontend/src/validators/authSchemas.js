@@ -53,6 +53,7 @@ export const profileSchema = z.object({
       .pipe(z.string().regex(/^[a-z0-9_]{3,20}$/, 'Use 3-20 letters, numbers, or underscores')),
     z.literal(''),
   ]),
-  bio: z.string().trim().max(500),
+  bio: z.string().trim().max(160, 'Keep your bio to 160 characters or fewer'),
+  about: z.string().trim().max(2000, 'Use 2,000 characters or fewer'),
   phone: z.union([z.string().trim().min(7).max(32), z.literal('')]),
 });

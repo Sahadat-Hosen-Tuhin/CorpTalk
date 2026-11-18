@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import EmojiPicker from 'emoji-picker-react';
-import { ImagePlus, Mic, Paperclip, Send, Smile, Square, X } from 'lucide-react';
+import { Camera, ImagePlus, Mic, Paperclip, Send, Smile, Square, X } from 'lucide-react';
 
 function ChatComposer({
   disabled,
@@ -16,6 +16,7 @@ function ChatComposer({
   const [recording, setRecording] = useState(false);
   const [recordingError, setRecordingError] = useState('');
   const fileInputRef = useRef(null);
+  const imageInputRef = useRef(null);
   const recorderRef = useRef(null);
   const streamRef = useRef(null);
   const typingTimerRef = useRef(null);
@@ -108,7 +109,7 @@ function ChatComposer({
   };
 
   return (
-    <div className="relative border-t border-border bg-bg px-4 py-4 sm:px-6">
+    <div className="relative border-t border-border bg-bg px-3 py-3 sm:px-5">
       {replyTo && (
         <div className="mb-3 flex items-center justify-between rounded-xl bg-surface px-3 py-2 text-sm">
           <div className="min-w-0">
@@ -133,7 +134,7 @@ function ChatComposer({
       <form className="flex items-end gap-2" onSubmit={submit}>
         <button
           type="button"
-          className="rounded-full p-2.5 text-text-muted hover:bg-surface hover:text-heading"
+          className="rounded-xl p-2.5 text-text-muted transition hover:bg-brand-primary-soft hover:text-brand-primary-text"
           aria-label="Add emoji"
           onClick={() => setEmojiOpen((open) => !open)}
           disabled={disabled}
@@ -142,7 +143,7 @@ function ChatComposer({
         </button>
         <button
           type="button"
-          className="rounded-full p-2.5 text-text-muted hover:bg-surface hover:text-heading"
+          className="rounded-xl p-2.5 text-text-muted transition hover:bg-brand-primary-soft hover:text-brand-primary-text"
           aria-label="Attach a file"
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled}
@@ -153,6 +154,22 @@ function ChatComposer({
           ref={fileInputRef}
           type="file"
           accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/quicktime,audio/mpeg,audio/mp4,audio/wav,audio/ogg,audio/webm,application/pdf"
+          className="hidden"
+          onChange={selectFile}
+        />
+        <button
+          type="button"
+          className="rounded-xl p-2.5 text-text-muted transition hover:bg-brand-primary-soft hover:text-brand-primary-text"
+          aria-label="Attach a photo"
+          onClick={() => imageInputRef.current?.click()}
+          disabled={disabled}
+        >
+          <Camera size={19} />
+        </button>
+        <input
+          ref={imageInputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/quicktime"
           className="hidden"
           onChange={selectFile}
         />
@@ -185,7 +202,7 @@ function ChatComposer({
         ) : text.trim() ? (
           <button
             type="submit"
-            className="rounded-full bg-brand-primary p-3 text-on-primary hover:bg-brand-primary-hover disabled:opacity-50"
+            className="rounded-xl bg-brand-primary p-3 text-on-primary transition hover:bg-brand-primary-hover disabled:opacity-50"
             aria-label="Send message"
             disabled={disabled}
           >
@@ -194,7 +211,7 @@ function ChatComposer({
         ) : (
           <button
             type="button"
-            className="rounded-full p-3 text-text-muted hover:bg-surface hover:text-heading disabled:opacity-50"
+            className="rounded-xl p-3 text-text-muted transition hover:bg-brand-primary-soft hover:text-brand-primary-text disabled:opacity-50"
             aria-label="Record a voice message"
             onClick={startRecording}
             disabled={disabled}

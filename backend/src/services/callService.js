@@ -1,3 +1,4 @@
+const { createHmac } = require('node:crypto');
 const mongoose = require('mongoose');
 const Block = require('../models/block');
 const Call = require('../models/call');
@@ -31,19 +32,31 @@ const ensureCallRelationship = async (callerId, receiverId, privacy) => {
     throw callError(403, 'FRIENDSHIP_REQUIRED', 'You can only call an accepted friend');
 };
 
-const getIceServers = () => {
+const getIceServers = (userId) => {
   const iceServers = [{ urls: process.env.CALL_STUN_URL || 'stun:stun.l.google.com:19302' }];
   const turnUrls = (process.env.CALL_TURN_URLS || '')
     .split(',')
     .map((url) => url.trim())
     .filter(Boolean);
   if (turnUrls.length) {
-    const turn = { urls: turnUrls };
-    if (process.env.CALL_TURN_USERNAME && process.env.CALL_TURN_CREDENTIAL) {
-      turn.username = process.env.CALL_TURN_USERNAME;
-      turn.credential = process.env.CALL_TURN_CREDENTIAL;
+    let username;
+    let credential;
+    if (process.env.CALL_TURN_SHARED_SECRET) {
+      username = `${Math.floor(Date.now() / 1000) + 3600}:${userId.toString()}`;
+      credential = createHmac('sha1', process.env.CALL_TURN_SHARED_SECRET)
+        .update(username)
+        .digest('base64');
+    } else if (process.env.CALL_TURN_USERNAME && process.env.CALL_TURN_CREDENTIAL) {
+      username = process.env.CALL_TURN_USERNAME;
+      credential = process.env.CALL_TURN_CREDENTIAL;
+    } else {
+      throw callError(
+        500,
+        'TURN_CONFIG_INVALID',
+        'TURN server URLs are configured without valid TURN credentials',
+      );
     }
-    iceServers.push(turn);
+    iceServers.push({ urls: turnUrls, username, credential });
   }
   return iceServers;
 };
@@ -145,6 +158,7 @@ const acceptCall = async (io, userId, callId) => {
   if (!mongoose.isValidObjectId(callId)) {
     throw callError(400, 'INVALID_CALL_ID', 'The call ID is invalid');
   }
+  const receiverIceServers = getIceServers(userId);
   const call = await Call.findOneAndUpdate(
     { _id: callId, receiver: userId, status: 'ringing' },
     { $set: { status: 'answered', startedAt: new Date() } },
@@ -163,11 +177,14 @@ const acceptCall = async (io, userId, callId) => {
       name: call.receiver.name,
       avatar: call.receiver.avatar,
     },
-    iceServers: getIceServers(),
   };
-  io.to(`user:${call.caller._id}`).emit('call:accept', payload);
-  io.to(`user:${call.receiver._id}`).emit('call:accept', payload);
-  return payload;
+  const receiverPayload = { ...payload, iceServers: receiverIceServers };
+  io.to(`user:${call.caller._id}`).emit('call:accept', {
+    ...payload,
+    iceServers: getIceServers(call.caller._id),
+  });
+  io.to(`user:${call.receiver._id}`).emit('call:accept', receiverPayload);
+  return receiverPayload;
 };
 
 const finishCall = async (io, userId, callId, status) => {
@@ -286,6 +303,7 @@ module.exports = {
   acceptCall,
   endActiveCallForUser,
   finishCall,
+  getIceServers,
   inviteCall,
   listCallHistory,
   relaySignal,

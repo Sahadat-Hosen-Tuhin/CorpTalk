@@ -47,7 +47,8 @@ const profileSchema = z
   .object({
     name: z.string().trim().min(1).max(80).optional(),
     username: username.optional(),
-    bio: z.string().trim().max(500).optional(),
+    bio: z.string().trim().max(160).optional(),
+    about: z.string().trim().max(2000).optional(),
     phone: z.string().trim().min(7).max(32).nullable().optional(),
   })
   .strict()

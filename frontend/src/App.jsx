@@ -16,6 +16,8 @@ import ForgotPassword from './pages/ForgotPassword.jsx';
 import Login from './pages/Login.jsx';
 import NotFoundPage from './pages/NotFoundPage.jsx';
 import Profile from './pages/Profile.jsx';
+import FriendsPage from './pages/FriendsPage.jsx';
+import PublicProfilePage from './pages/PublicProfilePage.jsx';
 import ResetPassword from './pages/ResetPassword.jsx';
 import SetupPage from './pages/SetupPage.jsx';
 import Signup from './pages/Signup.jsx';
@@ -44,6 +46,8 @@ function App() {
       <Route element={<RequireAuth />}>
         <Route element={<AppLayout />}>
           <Route path="profile" element={<Profile />} />
+          <Route path="friends" element={<FriendsPage />} />
+          <Route path=":profileSlug" element={<PublicProfilePage />} />
           <Route path="chat" element={<ChatPage />} />
           <Route path="chat/:conversationId" element={<ChatPage />} />
           <Route path="calls" element={<CallHistoryPage />} />

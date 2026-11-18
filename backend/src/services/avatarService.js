@@ -1,9 +1,9 @@
 const { Readable } = require('node:stream');
 const cloudinary = require('cloudinary').v2;
 const AppError = require('../utils/AppError');
-const { setAvatar } = require('./authService');
+const { setAvatar, setCoverPhoto } = require('./authService');
 
-const uploadAvatar = async (userId, file) => {
+const uploadProfileImage = async (userId, file, options) => {
   const {
     CLOUDINARY_CLOUD_NAME: cloudName,
     CLOUDINARY_API_KEY: apiKey,
@@ -11,28 +11,23 @@ const uploadAvatar = async (userId, file) => {
   } = process.env;
 
   if (!cloudName || !apiKey || !apiSecret) {
-    throw new AppError(503, 'AVATAR_STORAGE_NOT_CONFIGURED', 'Avatar storage is not configured');
+    throw new AppError(503, options.storageErrorCode, options.storageErrorMessage);
   }
 
   cloudinary.config({ cloud_name: cloudName, api_key: apiKey, api_secret: apiSecret });
   const uploaded = await new Promise((resolve, reject) => {
     const uploadStream = cloudinary.uploader.upload_stream(
       {
-        folder: 'corptalk/avatars',
+        folder: options.folder,
         resource_type: 'image',
-        transformation: [{ width: 512, height: 512, crop: 'limit' }],
+        transformation: options.transformation,
       },
       (error, result) => {
         if (error) {
           reject(
-            new AppError(
-              502,
-              'AVATAR_UPLOAD_FAILED',
-              'Could not upload the image. Please try again',
-              {
-                cause: error,
-              },
-            ),
+            new AppError(502, options.uploadErrorCode, options.uploadErrorMessage, {
+              cause: error,
+            }),
           );
           return;
         }
@@ -42,7 +37,7 @@ const uploadAvatar = async (userId, file) => {
     Readable.from([file.buffer]).pipe(uploadStream);
   });
 
-  const { user, previousPublicId } = await setAvatar(
+  const { user, previousPublicId } = await options.save(
     userId,
     uploaded.secure_url,
     uploaded.public_id,
@@ -54,14 +49,41 @@ const uploadAvatar = async (userId, file) => {
         resource_type: 'image',
       });
       if (cleanup.result !== 'ok' && cleanup.result !== 'not found') {
-        console.warn('Cloudinary returned an unexpected avatar cleanup status', cleanup.result);
+        console.warn(
+          `Cloudinary returned an unexpected ${options.label} cleanup status`,
+          cleanup.result,
+        );
       }
     } catch (error) {
-      console.warn('Could not remove the previous avatar from Cloudinary', error);
+      console.warn(`Could not remove the previous ${options.label} from Cloudinary`, error);
     }
   }
 
   return user;
 };
 
-module.exports = { uploadAvatar };
+const uploadAvatar = (userId, file) =>
+  uploadProfileImage(userId, file, {
+    folder: 'corptalk/avatars',
+    transformation: [{ width: 512, height: 512, crop: 'limit' }],
+    label: 'avatar',
+    storageErrorCode: 'AVATAR_STORAGE_NOT_CONFIGURED',
+    storageErrorMessage: 'Avatar storage is not configured',
+    uploadErrorCode: 'AVATAR_UPLOAD_FAILED',
+    uploadErrorMessage: 'Could not upload the image. Please try again',
+    save: setAvatar,
+  });
+
+const uploadCoverPhoto = (userId, file) =>
+  uploadProfileImage(userId, file, {
+    folder: 'corptalk/covers',
+    transformation: [{ width: 1600, height: 600, crop: 'fill', gravity: 'auto' }],
+    label: 'cover photo',
+    storageErrorCode: 'COVER_PHOTO_STORAGE_NOT_CONFIGURED',
+    storageErrorMessage: 'Cover photo storage is not configured',
+    uploadErrorCode: 'COVER_PHOTO_UPLOAD_FAILED',
+    uploadErrorMessage: 'Could not upload the cover photo. Please try again',
+    save: setCoverPhoto,
+  });
+
+module.exports = { uploadAvatar, uploadCoverPhoto };

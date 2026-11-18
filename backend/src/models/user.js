@@ -49,10 +49,29 @@ const userSchema = new Schema(
       default: null,
       select: false,
     },
+    coverPhoto: {
+      type: String,
+      trim: true,
+      maxlength: 2048,
+      default: null,
+    },
+    coverPhotoPublicId: {
+      type: String,
+      trim: true,
+      maxlength: 512,
+      default: null,
+      select: false,
+    },
     bio: {
       type: String,
       trim: true,
-      maxlength: 500,
+      maxlength: 160,
+      default: '',
+    },
+    about: {
+      type: String,
+      trim: true,
+      maxlength: 2000,
       default: '',
     },
     isVerified: {
@@ -141,6 +160,13 @@ const userSchema = new Schema(
     optimisticConcurrency: true,
   },
 );
+
+userSchema.pre('validate', function moveLegacyBioToAbout() {
+  if (this.bio?.length > 160 && !this.about) {
+    this.about = this.bio;
+    this.bio = '';
+  }
+});
 
 userSchema.index({ email: 1 }, { unique: true, name: 'email_unique' });
 userSchema.index(

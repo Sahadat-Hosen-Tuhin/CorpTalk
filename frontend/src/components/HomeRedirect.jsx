@@ -1,6 +1,7 @@
 import { Navigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore.js';
 import PageLoader from './PageLoader.jsx';
+import LandingPage from '../pages/LandingPage.jsx';
 
 function HomeRedirect() {
   const initialized = useAuthStore((state) => state.initialized);
@@ -9,7 +10,7 @@ function HomeRedirect() {
   if (!initialized) {
     return <PageLoader />;
   }
-  return <Navigate to={user ? '/profile' : '/login'} replace />;
+  return user ? <Navigate to="/profile" replace /> : <LandingPage />;
 }
 
 export default HomeRedirect;

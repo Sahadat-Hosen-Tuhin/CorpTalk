@@ -26,7 +26,7 @@ const errorHandler = (error, req, res, next) => {
     statusCode >= 500 && process.env.NODE_ENV === 'production'
       ? 'Internal server error'
       : error.code === 'LIMIT_FILE_SIZE'
-        ? 'Avatar images must be 5 MB or smaller'
+        ? 'Uploaded images must be 5 MB or smaller'
         : error.message || 'Internal server error';
 
   return res.status(statusCode).json({

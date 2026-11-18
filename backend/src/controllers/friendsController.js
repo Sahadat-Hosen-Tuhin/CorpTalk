@@ -16,9 +16,15 @@ const searchUsers = async (req, res) => {
   res.status(200).json({ data: { users } });
 };
 
+const getPublicProfile = async (req, res) => {
+  const user = await friendsService.getPublicProfile(req.user._id, req.params.profileSlug);
+  res.status(200).json({ data: { user } });
+};
+
 const listFriends = async (req, res) => {
   const search = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 40) : '';
-  const friends = await friendsService.listFriends(req.user._id, search);
+  const sort = req.query.sort === 'recent' ? 'recent' : 'name';
+  const friends = await friendsService.listFriends(req.user._id, search, sort);
   res.status(200).json({ data: { friends } });
 };
 
@@ -116,6 +122,7 @@ module.exports = {
   acceptRequest,
   blockUser,
   cancelRequest,
+  getPublicProfile,
   listFriends,
   listBlocked,
   listRequests,

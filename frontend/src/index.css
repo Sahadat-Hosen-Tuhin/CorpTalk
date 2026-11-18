@@ -136,3 +136,55 @@ a {
   color: var(--on-primary);
   background: var(--brand-primary);
 }
+
+.dashboard-icon {
+  display: grid;
+  width: 2.5rem;
+  height: 2.5rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 0.75rem;
+}
+
+.dashboard-icon-orange {
+  color: var(--brand-primary-text);
+  background: var(--brand-primary-soft);
+}
+
+.dashboard-icon-violet {
+  color: #7154a3;
+  background: #f1edfc;
+}
+
+.dashboard-icon-green {
+  color: var(--success);
+  background: rgb(46 158 91 / 10%);
+}
+
+.dashboard-icon-blue {
+  color: var(--info);
+  background: rgb(47 123 217 / 10%);
+}
+
+:root.dark .dashboard-icon-violet {
+  color: #c4b2ec;
+  background: #322942;
+}
+
+.app-header-nav {
+  scrollbar-width: none;
+}
+
+.app-header-nav::-webkit-scrollbar {
+  display: none;
+}
+
+.chat-message-canvas {
+  background-color: var(--bg-subtle);
+  background-image: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--brand-primary) 7%, transparent) 1px,
+    transparent 1px
+  );
+  background-size: 28px 28px;
+}

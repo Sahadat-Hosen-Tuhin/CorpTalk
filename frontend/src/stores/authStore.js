@@ -100,6 +100,16 @@ export const useAuthStore = create((set) => ({
     return response.data.data.user;
   },
 
+  async uploadCoverPhoto(file) {
+    const formData = new FormData();
+    formData.append('coverPhoto', file);
+    const response = await apiClient.post('/users/me/cover-photo', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    set({ user: response.data.data.user });
+    return response.data.data.user;
+  },
+
   async logout() {
     try {
       await apiClient.post('/auth/logout');

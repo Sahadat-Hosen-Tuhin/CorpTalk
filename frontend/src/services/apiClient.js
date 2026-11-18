@@ -19,6 +19,9 @@ export const setAccessToken = (token) => {
 export const getAccessToken = () => accessToken;
 
 apiClient.interceptors.request.use((config) => {
+  if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+    config.headers.delete('Content-Type');
+  }
   if (accessToken) {
     config.headers.Authorization = `Bearer ${accessToken}`;
   }
