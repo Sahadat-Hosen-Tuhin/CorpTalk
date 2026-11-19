@@ -9,10 +9,14 @@ const Friendship = require('../models/friendship');
 
 const refreshCookieName = () => process.env.REFRESH_COOKIE_NAME || 'refreshToken';
 const cookieOptions = () => {
+  const isProduction = process.env.NODE_ENV === 'production';
   const options = {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production' || process.env.COOKIE_SECURE === 'true',
-    sameSite: process.env.REFRESH_COOKIE_SAME_SITE || process.env.COOKIE_SAME_SITE || 'lax',
+    secure: isProduction || process.env.COOKIE_SECURE === 'true',
+    sameSite:
+      process.env.REFRESH_COOKIE_SAME_SITE ||
+      process.env.COOKIE_SAME_SITE ||
+      (isProduction ? 'none' : 'lax'),
     path: '/api/v1/auth',
   };
   if (process.env.COOKIE_DOMAIN) {

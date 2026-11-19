@@ -54,6 +54,29 @@ const latestCode = () => sendOtpEmail.mock.calls[sendOtpEmail.mock.calls.length 
 const sessionCookie = (response) =>
   response.headers['set-cookie'].find((cookie) => cookie.startsWith('refreshToken=')).split(';')[0];
 
+const withProductionCookieDefaults = async (operation) => {
+  const originalEnvironment = {
+    NODE_ENV: process.env.NODE_ENV,
+    COOKIE_SAME_SITE: process.env.COOKIE_SAME_SITE,
+    REFRESH_COOKIE_SAME_SITE: process.env.REFRESH_COOKIE_SAME_SITE,
+  };
+  process.env.NODE_ENV = 'production';
+  delete process.env.COOKIE_SAME_SITE;
+  delete process.env.REFRESH_COOKIE_SAME_SITE;
+
+  try {
+    return await operation();
+  } finally {
+    for (const [key, value] of Object.entries(originalEnvironment)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+};
+
 const registerAndVerify = async (email) => {
   const signup = await request(app).post('/api/v1/auth/signup').send({
     name: 'Test User',
@@ -98,14 +121,18 @@ describe('authentication API', () => {
     const email = 'first.user@example.com';
     await registerAndVerify(email);
 
-    const login = await request(app).post('/api/v1/auth/login').send({
-      email,
-      password: 'strong-test-password',
-    });
+    const login = await withProductionCookieDefaults(() =>
+      request(app).post('/api/v1/auth/login').send({
+        email,
+        password: 'strong-test-password',
+      }),
+    );
     expect(login.status).toBe(200);
     expect(login.body.data).toHaveProperty('accessToken');
     expect(login.body.data).not.toHaveProperty('refreshToken');
     expect(login.headers['set-cookie'][0]).toContain('HttpOnly');
+    expect(login.headers['set-cookie'][0]).toContain('SameSite=None');
+    expect(login.headers['set-cookie'][0]).toContain('Secure');
     const oldCookie = sessionCookie(login);
 
     const profile = await request(app)

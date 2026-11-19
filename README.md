@@ -164,10 +164,10 @@ NODE_ENV=production
 APP_URL=https://<frontend-host>
 CORS_ORIGINS=https://<frontend-host>
 COOKIE_SECURE=true
-COOKIE_SAME_SITE=lax
+COOKIE_SAME_SITE=none
 ```
 
-Use a comma-separated list of exact frontend origins in `CORS_ORIGINS`, without trailing slashes. Leave `COOKIE_DOMAIN` empty for unrelated frontend/backend hostnames. For cross-site deployments, configure `COOKIE_SAME_SITE=none` together with secure cookies. Custom subdomains under one parent domain are preferable for cookie and CORS reliability.
+Use a comma-separated list of exact frontend origins in `CORS_ORIGINS`, without trailing slashes. For separate frontend and backend hosts (such as Vercel and Render), set `COOKIE_SAME_SITE=none` together with secure cookies so the browser sends the refresh cookie on API requests. Leave `COOKIE_DOMAIN` empty for unrelated hostnames. Custom subdomains under one parent domain are preferable for cookie and CORS reliability.
 
 The health endpoint should return HTTP `200`:
 
