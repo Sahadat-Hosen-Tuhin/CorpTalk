@@ -61,8 +61,8 @@ const withProductionCookieDefaults = async (operation) => {
     REFRESH_COOKIE_SAME_SITE: process.env.REFRESH_COOKIE_SAME_SITE,
   };
   process.env.NODE_ENV = 'production';
-  delete process.env.COOKIE_SAME_SITE;
-  delete process.env.REFRESH_COOKIE_SAME_SITE;
+  process.env.COOKIE_SAME_SITE = 'lax';
+  process.env.REFRESH_COOKIE_SAME_SITE = 'lax';
 
   try {
     return await operation();

@@ -13,10 +13,9 @@ const cookieOptions = () => {
   const options = {
     httpOnly: true,
     secure: isProduction || process.env.COOKIE_SECURE === 'true',
-    sameSite:
-      process.env.REFRESH_COOKIE_SAME_SITE ||
-      process.env.COOKIE_SAME_SITE ||
-      (isProduction ? 'none' : 'lax'),
+    sameSite: isProduction
+      ? 'none'
+      : process.env.REFRESH_COOKIE_SAME_SITE || process.env.COOKIE_SAME_SITE || 'lax',
     path: '/api/v1/auth',
   };
   if (process.env.COOKIE_DOMAIN) {
