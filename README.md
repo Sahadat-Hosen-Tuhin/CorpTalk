@@ -150,12 +150,13 @@ For a Render monorepo service using `backend` as the root directory:
 - Start command: `npm start`
 - Port: supplied by the platform through `PORT`
 
-Set these frontend build variables to the deployed backend origin:
+For Vercel, `frontend/vercel.json` proxies `/api/*` to the backend so browser API and refresh-cookie requests stay same-origin. Set the socket URL to the deployed backend origin:
 
 ```env
-VITE_API_URL=https://<backend-host>
 VITE_SOCKET_URL=https://<backend-host>
 ```
+
+Other static hosts must provide an equivalent same-origin `/api/*` proxy for cookie-based session restoration.
 
 Set these backend variables for production:
 
