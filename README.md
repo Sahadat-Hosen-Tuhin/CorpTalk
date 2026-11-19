@@ -141,6 +141,7 @@ Open the Vite URL, normally `http://localhost:5173`. Verify the API at `http://l
 Deploy `frontend/` and `backend/` as separate services.
 
 - Host the Vite frontend on Vercel or another static-site provider.
+- For Vercel, set the project Root Directory to `frontend`; its `vercel.json` rewrites direct route requests to the SPA entry point so React Router can handle them.
 - Host the backend on a persistent Node.js service such as Render Web Service. Do not use a standard serverless function: Socket.IO and background jobs require a running process.
 
 For a Render monorepo service using `backend` as the root directory:
